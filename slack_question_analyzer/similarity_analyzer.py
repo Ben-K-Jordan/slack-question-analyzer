@@ -80,7 +80,10 @@ class SimilarityAnalyzer:
             self.threshold_pinned = True
         else:
             # Local models (nomic etc.) score paraphrases lower than ada-002
-            self.similarity_threshold = 0.75 if provider == 'ollama' else 0.85
+            # Field-calibrated on real MFT transcripts: in a single-domain
+            # channel, nomic scores UNRELATED questions ~0.65-0.72, so the
+            # threshold must sit above that noise band
+            self.similarity_threshold = 0.80 if provider == 'ollama' else 0.85
             self.threshold_pinned = False
         self.threshold_auto_adjusted = False
 
@@ -404,20 +407,31 @@ class SimilarityAnalyzer:
             clusters = self._cluster_buckets(len(buckets), similarity_matrix)
 
             # Auto-adjust: when the user didn't pin a threshold and nothing
-            # merged, re-cluster just below the most similar pair (cheap — the
-            # matrix is already computed) instead of returning all singletons
+            # merged, re-cluster just below the most similar pair — but ONLY
+            # if that pair clearly stands out from the bulk. In single-domain
+            # corpora the bulk of pairwise similarities forms a dense noise
+            # band (every question mentions the same product); relaxing into
+            # that band merges unrelated topics into meaningless blobs.
             stats = self.last_similarity_stats
             if (not self.threshold_pinned
                     and all(len(c) == 1 for c in clusters)
                     and stats and stats['max'] < self.similarity_threshold):
+                separation = stats['max'] - stats['p90']
                 adjusted = round(stats['max'] - 0.02, 2)
-                if adjusted >= 0.35:  # below this, "most similar" is just noise
+                if separation >= 0.04 and adjusted >= 0.5:
                     logger.info("No groups at threshold %.2f; auto-adjusting to "
-                                "%.2f (most similar pair: %.3f)",
-                                self.similarity_threshold, adjusted, stats['max'])
+                                "%.2f (top pair %.3f stands out from the bulk, "
+                                "p90 %.3f)", self.similarity_threshold, adjusted,
+                                stats['max'], stats['p90'])
                     self.similarity_threshold = adjusted
                     self.threshold_auto_adjusted = True
                     clusters = self._cluster_buckets(len(buckets), similarity_matrix)
+                else:
+                    logger.info("No groups at threshold %.2f and NOT auto-adjusting: "
+                                "top pair (%.3f) sits inside the noise band "
+                                "(p90 %.3f) — these questions are about "
+                                "genuinely different topics",
+                                self.similarity_threshold, stats['max'], stats['p90'])
 
             # Tier 4: LLM double-check for merges embeddings couldn't decide
             if verifier is not None and len(clusters) > 1:
@@ -575,11 +589,21 @@ class SimilarityAnalyzer:
             ra, rb = find(a), find(b)
             if ra == rb:
                 continue
+
+            # Guard: even with an LLM yes, the merged cluster must stay
+            # numerically tight — otherwise a liberal model re-creates the
+            # mixed mega-groups average-link exists to prevent
+            combined = clusters[ra] + clusters[rb]
+            pair_sims = [similarity_matrix[x][y]
+                         for ix, x in enumerate(combined) for y in combined[ix + 1:]]
+            if float(np.mean(pair_sims)) < self.similarity_threshold - margin:
+                continue
+
             texts_a = [buckets[idx][0]['text'] for idx in clusters[ra][:3]]
             texts_b = [buckets[idx][0]['text'] for idx in clusters[rb][:3]]
             if verifier(texts_a, texts_b) is True:
                 parent[rb] = ra
-                clusters[ra] = clusters[ra] + clusters[rb]
+                clusters[ra] = combined
                 merged_count += 1
 
         if merged_count:

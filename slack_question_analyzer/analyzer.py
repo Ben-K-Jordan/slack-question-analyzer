@@ -351,7 +351,7 @@ class QuestionAnalyzer:
         labeled_by = {}    # id(group) -> 'bank' | 'llm' | 'keywords'
         if bank.enabled:
             threshold = max(self.similarity_analyzer.similarity_threshold,
-                            float(os.getenv('BANK_MATCH_THRESHOLD', '0.8')))
+                            float(os.getenv('BANK_MATCH_THRESHOLD', '0.85')))
             for group in candidates:
                 centroid = self._group_centroid(group)
                 matched = bank.match(centroid, threshold)
