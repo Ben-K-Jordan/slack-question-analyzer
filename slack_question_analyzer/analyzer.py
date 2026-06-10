@@ -245,8 +245,27 @@ class QuestionAnalyzer:
             'analyzed_at': datetime.now(timezone.utc).isoformat(),
             'similarity_threshold': self.similarity_analyzer.similarity_threshold,
             'model': self.similarity_analyzer.embedding_model,
-            'provider': self.similarity_analyzer.provider
+            'provider': self.similarity_analyzer.provider,
+            # Pairwise similarity distribution — similarity scales differ
+            # between embedding models, so this is how users tune the threshold
+            'similarity_stats': self.similarity_analyzer.last_similarity_stats,
         }
+
+    @staticmethod
+    def suggested_threshold(results: Dict) -> Optional[float]:
+        """
+        When nothing grouped, suggest a threshold just below the most similar
+        pair so the next run produces at least one group. None when the
+        current threshold already groups things (or there's nothing to group).
+        """
+        stats = results.get('metadata', {}).get('similarity_stats')
+        if not stats or results.get('total_groups', 0) > 0:
+            return None
+        threshold = results['metadata']['similarity_threshold']
+        if stats['max'] >= threshold:
+            return None
+        suggestion = round(stats['max'] - 0.02, 2)
+        return suggestion if 0 < suggestion < threshold else None
 
     def _label_groups(self, groups: List[Dict], report):
         """
@@ -294,7 +313,8 @@ class QuestionAnalyzer:
             return distinct
 
         cache = self.similarity_analyzer.embeddings_cache
-        vectors = [cache.get(q['normalized_text']) for q in distinct]
+        prefix = self.similarity_analyzer.embed_prefix
+        vectors = [cache.get(prefix + q['normalized_text']) for q in distinct]
         if any(v is None for v in vectors):
             return distinct[:k]
 
@@ -426,6 +446,14 @@ class QuestionAnalyzer:
             print(f"Answered (via thread replies): {results['answered_questions']}")
         print(f"Similarity Threshold: {results['metadata']['similarity_threshold']}")
         print(f"Model Used: {results['metadata']['model']}")
+
+        suggestion = self.suggested_threshold(results)
+        if suggestion is not None:
+            stats = results['metadata']['similarity_stats']
+            print(f"\nTIP: No questions grouped at threshold "
+                  f"{results['metadata']['similarity_threshold']}. Your most "
+                  f"similar pair scored {stats['max']} — similarity scales vary "
+                  f"by embedding model. Try: --threshold {suggestion}")
 
         if results.get('executive_summary'):
             print("\n" + "-"*80)

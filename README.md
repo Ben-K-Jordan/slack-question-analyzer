@@ -111,6 +111,12 @@ Higher threshold = stricter grouping (0.0 to 1.0):
 slack-analyzer analyze example_input.txt --threshold 0.9
 ```
 
+**Similarity scales vary a lot between embedding models** — 0.85 suits OpenAI's
+ada-002, but local models like `nomic-embed-text` score paraphrases lower (often
+0.6–0.8), so start around `--threshold 0.7` with Ollama. When nothing groups, the
+results include pairwise similarity stats (`metadata.similarity_stats`) and both the
+dashboard and CLI summary suggest a threshold just below your most similar pair.
+
 ### Choose an Output Format
 
 The output format is inferred from the file extension:
