@@ -175,7 +175,7 @@
     } catch (err) { /* job may already be finishing; polling will resolve it */ }
   }
 
-  window.QA_API = { API_BASE, health, latestAnalysis, listAnalyses, getAnalysis,
+  window.QA_API = { health, latestAnalysis, listAnalyses, getAnalysis,
     deleteAnalysis, exportUrl, latestWeekly, analyze, cancelJob, pullModel, pullStatus,
     listTopics, deleteTopic, mergeTopics, renameTopic };
 

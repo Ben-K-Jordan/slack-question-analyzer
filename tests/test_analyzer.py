@@ -103,11 +103,9 @@ def test_empty_content(analyzer):
 
 
 def test_json_export(analyzer, tmp_path):
-    input_file = tmp_path / 'input.txt'
-    input_file.write_text(SAMPLE_CONTENT, encoding='utf-8')
     output_file = tmp_path / 'results.json'
-
-    analyzer.analyze_from_file(str(input_file), str(output_file))
+    results = analyzer.analyze_slack_content(SAMPLE_CONTENT)
+    analyzer.save_results(results, str(output_file))
 
     saved = json.loads(output_file.read_text(encoding='utf-8'))
     assert saved['total_questions'] == 3
