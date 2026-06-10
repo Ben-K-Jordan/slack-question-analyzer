@@ -445,6 +445,12 @@ class SimilarityAnalyzer:
                                 "genuinely different topics",
                                 self.effective_threshold, stats['max'], stats['p90'])
 
+            # The LLM confirms every numeric pair: embeddings not trained on
+            # the domain score some UNRELATED pairs as high as true pairs, so
+            # embeddings nominate and the language model decides
+            if verifier is not None:
+                clusters = self._confirm_pair_clusters(clusters, buckets, verifier)
+
             # Tier 4: LLM double-check for merges embeddings couldn't decide
             if verifier is not None and len(clusters) > 1:
                 clusters = self._merge_borderline_clusters(clusters, similarity_matrix,
@@ -453,8 +459,9 @@ class SimilarityAnalyzer:
             groups = [self._build_group(indices, buckets, embeddings, similarity_matrix)
                       for indices in clusters]
 
-        # Sort groups by count (most common first)
-        groups.sort(key=lambda x: x['count'], reverse=True)
+        # Rank by frequency; break ties by cohesion so equal-count groups
+        # have a deterministic, defensible order
+        groups.sort(key=lambda x: (-x['count'], -x['avg_similarity']))
 
         sizes = [(g['count'], round(g['avg_similarity'], 3)) for g in groups[:8]]
         logger.info("Grouping bar %.3f (threshold %.2f%s) -> groups (count, avg): %s",
@@ -593,6 +600,34 @@ class SimilarityAnalyzer:
             clusters.append(group_indices)
 
         return clusters
+
+    def _confirm_pair_clusters(self, clusters: List[List[int]],
+                               buckets: List[List[Dict]], verifier) -> List[List[int]]:
+        """
+        Confirm every embedding-formed pair with the LLM and split rejects.
+
+        Field finding: an embedding model that wasn't trained on the domain
+        scores some unrelated pairs (metering vs. cloud tokens: 0.81) as high
+        as genuine pairs (0.78-0.83) — no numeric bar can separate them. The
+        verifier's domain knowledge is the decider; on uncertainty (None),
+        the numeric merge stands.
+        """
+        max_checks = int(os.getenv('LLM_VERIFY_MAX', '10'))
+        checked = 0
+        confirmed = []
+        for cluster in clusters:
+            if len(cluster) == 2 and checked < max_checks:
+                checked += 1
+                text_a = buckets[cluster[0]][0]['text']
+                text_b = buckets[cluster[1]][0]['text']
+                if verifier([text_a], [text_b]) is False:
+                    logger.info("AI split a numeric pair (different topics): "
+                                "%.70r / %.70r", text_a, text_b)
+                    confirmed.append([cluster[0]])
+                    confirmed.append([cluster[1]])
+                    continue
+            confirmed.append(cluster)
+        return confirmed
 
     def _merge_borderline_clusters(self, clusters: List[List[int]], similarity_matrix,
                                    buckets: List[List[Dict]], verifier) -> List[List[int]]:

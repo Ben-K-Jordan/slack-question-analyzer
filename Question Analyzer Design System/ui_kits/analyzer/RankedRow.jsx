@@ -1,7 +1,7 @@
 // Animated, expandable ranked question row — shared by Dashboard & Week.
 function RankedRow({ rank, question, count, maxCount, keywords = [], movement = null,
   similarity = null, questions = null, index = 0, defaultOpen = false,
-  topic = null, summary = null, seenIn = 0, onRenameTopic = null }) {
+  topic = null, summary = null, seenIn = 0, onRenameTopic = null, aiConfirmed = false }) {
   const [open, setOpen] = React.useState(defaultOpen);
   const [hover, setHover] = React.useState(false);
   const [shown, setShown] = React.useState(false);
@@ -14,8 +14,9 @@ function RankedRow({ rank, question, count, maxCount, keywords = [], movement = 
   React.useEffect(() => { const id = setTimeout(() => setShown(true), 80 + stagger * 70); return () => clearTimeout(id); }, []);
   React.useEffect(() => { if (bodyRef.current) setBodyH(bodyRef.current.scrollHeight); }, [open, questions]);
 
-  const heat = rank === 1 ? 'var(--blue-60)' : rank === 2 ? 'var(--blue-50)' : rank === 3 ? 'var(--blue-40)' : 'var(--gray-40)';
+  // Color by relative count, not rank position: tied groups must look equal
   const pct = Math.max(6, Math.round((count / Math.max(1, maxCount)) * 100));
+  const heat = pct >= 90 ? 'var(--blue-60)' : pct >= 60 ? 'var(--blue-50)' : pct >= 30 ? 'var(--blue-40)' : 'var(--gray-40)';
 
   return (
     <div style={{
@@ -73,7 +74,7 @@ function RankedRow({ rank, question, count, maxCount, keywords = [], movement = 
         <div style={{ maxHeight: open ? bodyH : 0, overflow: 'hidden', transition: 'max-height var(--duration-slow) var(--ease-productive)' }}>
           <div ref={bodyRef} style={{ padding: '0 20px 18px', marginLeft: movement != null ? 98 : 50 }}>
             {summary ? <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 10, fontStyle: 'italic' }}>{summary}</div> : null}
-            {similarity ? <div style={{ fontSize: 12, color: 'var(--text-helper)', marginBottom: 10 }}>Avg. similarity <b style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>{similarity}</b> · {questions.length} occurrences</div> : null}
+            {similarity ? <div style={{ fontSize: 12, color: 'var(--text-helper)', marginBottom: 10 }}>Avg. similarity <b style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>{similarity}</b> · {questions.length} occurrences{aiConfirmed ? ' · match confirmed by AI' : ''}</div> : null}
             <ul style={{ listStyle: 'none', margin: 0, padding: 0, borderLeft: '1px solid var(--border-subtle)' }}>
               {questions.map((q, i) => (
                 <li key={i} style={{

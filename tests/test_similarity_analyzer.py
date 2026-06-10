@@ -486,3 +486,76 @@ def test_noise_gate_capped(monkeypatch):
     analyzer = make_analyzer(monkeypatch, threshold='0.85')
     analyzer.last_similarity_stats = {'max': 0.99, 'p90': 0.97, 'median': 0.95}
     assert analyzer._gated_threshold(20) == 0.95  # never above the cap
+
+
+def test_ai_splits_false_numeric_pairs(monkeypatch):
+    """
+    Field regression (metering + Azure tokens at 0.81): embeddings score some
+    unrelated pairs as high as true pairs. Every numeric pair is confirmed by
+    the verifier; rejected pairs are split.
+    """
+    analyzer = make_analyzer(monkeypatch, threshold='0.75')
+    fake = np.array([[1.0, 0.0], [0.81, np.sqrt(1 - 0.81 ** 2)]])
+    monkeypatch.setattr(analyzer, 'get_embeddings_batch',
+                        lambda texts, progress_callback=None: fake)
+
+    questions = [question('Does the metering agent come pre-installed?'),
+                 question('Are container-level Azure tokens supported?')]
+    groups = analyzer.group_similar_questions(questions,
+                                              verifier=lambda a, b: False)
+    assert len(groups) == 2  # the false 0.81 pair was split by the AI
+    assert all(g['count'] == 1 for g in groups)
+
+
+def test_uncertain_verifier_keeps_numeric_pairs(monkeypatch):
+    """On verifier failure (None), the numeric merge stands."""
+    analyzer = make_analyzer(monkeypatch, threshold='0.75')
+    fake = np.array([[1.0, 0.0], [0.81, np.sqrt(1 - 0.81 ** 2)]])
+    monkeypatch.setattr(analyzer, 'get_embeddings_batch',
+                        lambda texts, progress_callback=None: fake)
+
+    questions = [question('How do I reset my password?'),
+                 question('Steps for changing my password?')]
+    groups = analyzer.group_similar_questions(questions, verifier=lambda a, b: None)
+    assert len(groups) == 1
+    assert groups[0]['count'] == 2
+
+
+def test_pair_confirmation_respects_call_cap(monkeypatch):
+    analyzer = make_analyzer(monkeypatch, threshold='0.75')
+    monkeypatch.setenv('LLM_VERIFY_MAX', '1')
+    calls = []
+
+    def verifier(a, b):
+        calls.append((a, b))
+        return False
+
+    clusters = analyzer._confirm_pair_clusters(
+        [[0, 1], [2, 3], [4]],
+        [[question(f'q{i}?')] for i in range(5)], verifier)
+    assert len(calls) == 1            # cap enforced
+    assert clusters == [[0], [1], [2, 3], [4]]  # only the checked pair split
+
+
+def test_ranking_breaks_count_ties_by_cohesion(monkeypatch):
+    """Equal-count groups must rank by avg similarity, not insertion order."""
+    analyzer = make_analyzer(monkeypatch, threshold='0.75')
+    # Pair A at ~0.78, pair B at ~0.95 (orthogonal across pairs)
+    fake = np.array([
+        [1.0, 0.0, 0.0, 0.0],
+        [0.78, float(np.sqrt(1 - 0.78 ** 2)), 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.95, float(np.sqrt(1 - 0.95 ** 2))],
+    ])
+    monkeypatch.setattr(analyzer, 'get_embeddings_batch',
+                        lambda texts, progress_callback=None: fake)
+
+    questions = [question('first pair question one?'),
+                 question('first pair question two?'),
+                 question('second pair question one?'),
+                 question('second pair question two?')]
+    groups = analyzer.group_similar_questions(questions)
+
+    assert [g['count'] for g in groups] == [2, 2]
+    # Tighter group ranks first despite equal counts
+    assert groups[0]['avg_similarity'] > groups[1]['avg_similarity']
