@@ -19,12 +19,12 @@ function DashboardView() {
   // First-run onboarding: surface backend/model setup problems before the
   // user wastes an upload finding out. Missing Ollama models get a one-click
   // download button instead of terminal instructions.
-  const [setupHealth, setSetupHealth] = React.useState(null); // health payload when not ok
+  const [setupHealth, setSetupHealth] = React.useState(null); // latest health payload
   const [pulls, setPulls] = React.useState({}); // model -> {pct, detail, error}
   const checkHealth = React.useCallback(() => {
     if (!window.QA_API) return;
     window.QA_API.health(window.QA_SETTINGS && window.QA_SETTINGS.get().provider)
-      .then((h) => setSetupHealth(h.status === 'ok' ? null : h))
+      .then(setSetupHealth)
       .catch(() => setSetupHealth({ status: 'unavailable',
         message: 'Cannot reach the analyzer backend. Start it with: python api_server.py' }));
   }, []);
@@ -65,7 +65,9 @@ function DashboardView() {
     }
   };
 
-  // Models the banner should offer to download (Ollama reachable but missing)
+  // Models the banner should offer to download (Ollama reachable but missing).
+  // A missing LABEL model doesn't fail health (analysis still works), but it
+  // silently downgrades topic names to keywords — so surface it here too.
   const missingModels = [];
   if (setupHealth && setupHealth.ollama && setupHealth.ollama.reachable) {
     if (!setupHealth.ollama.model_available) missingModels.push(setupHealth.ollama.model);
@@ -73,12 +75,14 @@ function DashboardView() {
       missingModels.push(setupHealth.ollama.label_model);
     }
   }
+  const healthBroken = setupHealth && setupHealth.status !== 'ok';
+  const showSetupBanner = healthBroken || missingModels.length > 0;
 
   const isDemo = !analysisResults;
   const d = analysisResults ? transformAnalysisResults(analysisResults) : window.DASHBOARD_DATA;
   const [query, setQuery] = React.useState('');
   const [visibleCount, setVisibleCount] = React.useState(PAGE_SIZE);
-  const [showUnique, setShowUnique] = React.useState(false);
+  const [showUnique, setShowUnique] = React.useState(true);
 
   const exportBtn = {
     height: 32, padding: '0 12px', display: 'inline-flex', alignItems: 'center', gap: 6,
@@ -153,12 +157,12 @@ function DashboardView() {
         </div>
       </Reveal>
 
-      {setupHealth ? (
+      {showSetupBanner ? (
         <Reveal delay={100}>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: '16px 24px', background: '#fff', border: '1px solid var(--border-subtle)', borderLeft: '3px solid var(--red-60)', marginBottom: 32 }}>
-            <span style={{ color: 'var(--red-60)', flex: '0 0 auto', marginTop: 1 }}><Icon name="alert-triangle" size={16} /></span>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: '16px 24px', background: '#fff', border: '1px solid var(--border-subtle)', borderLeft: `3px solid ${healthBroken ? 'var(--red-60)' : 'var(--blue-60)'}`, marginBottom: 32 }}>
+            <span style={{ color: healthBroken ? 'var(--red-60)' : 'var(--blue-60)', flex: '0 0 auto', marginTop: 1 }}><Icon name={healthBroken ? 'alert-triangle' : 'download'} size={16} /></span>
             <div style={{ fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.55, minWidth: 0, flex: 1 }}>
-              <b>Setup needed before analyzing.</b>
+              <b>{healthBroken ? 'Setup needed before analyzing.' : 'Topic labels are running in keyword-fallback mode.'}</b>
               {missingModels.length === 0 ? <span> {setupHealth.message}</span> : null}
               {missingModels.map((model) => (
                 <div key={model} style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 10 }}>
@@ -250,7 +254,7 @@ function DashboardView() {
             <span style={{ display: 'inline-flex', transform: showUnique ? 'rotate(90deg)' : 'none', transition: 'transform var(--duration-base) var(--ease-productive)' }}>
               <Icon name="chevron-right" size={14} />
             </span>
-            Unique questions ({uniqueQuestions.length}) — asked only once
+            Unique questions ({uniqueQuestions.length}) — asked only once, kept in every export
           </button>
           {showUnique ? (
             <ul style={{ listStyle: 'none', margin: '12px 0 0', padding: 0, borderLeft: '1px solid var(--border-subtle)' }}>
