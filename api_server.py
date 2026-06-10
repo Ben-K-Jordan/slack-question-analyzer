@@ -166,8 +166,13 @@ def health_check():
             response.raise_for_status()
             models = [m.get('name', '') for m in response.json().get('models', [])]
             model_available = any(name == model or name.startswith(f"{model}:") for name in models)
+            label_model = os.getenv('OLLAMA_GENERATION_MODEL', 'llama3.2')
+            label_available = any(name == label_model or name.startswith(f"{label_model}:")
+                                  for name in models)
             health['ollama'] = {'reachable': True, 'model': model,
-                                'model_available': model_available}
+                                'model_available': model_available,
+                                'label_model': label_model,
+                                'label_model_available': label_available}
             if not model_available:
                 health['status'] = 'degraded'
                 health['message'] = (f"Ollama is running but model '{model}' is not "

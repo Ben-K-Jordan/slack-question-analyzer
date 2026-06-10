@@ -1,10 +1,21 @@
 """
 Question extraction and parsing module.
-Extracts questions from Slack message text.
+Extracts questions from Slack content in multiple formats:
+
+- Plain text with dashed separators between messages
+- Slack JSON exports (a list of message objects, or {"messages": [...]})
+- CSV with a text/message/question column and optional date column
+
+Slack markup (mentions, links, emoji codes, code blocks) is stripped before
+question detection so it doesn't pollute grouping.
 """
 
 import re
-from typing import List, Dict
+import csv
+import io
+import json
+from datetime import datetime, timezone
+from typing import List, Dict, Optional
 
 
 class QuestionExtractor:
@@ -99,6 +110,7 @@ class QuestionExtractor:
     def parse_slack_content(self, content: str) -> List[Dict]:
         """
         Parse Slack content and extract questions with metadata.
+        The format (JSON, CSV, or plain text) is detected automatically.
 
         Args:
             content: Raw Slack content string
@@ -106,6 +118,125 @@ class QuestionExtractor:
         Returns:
             List of dictionaries containing questions and metadata
         """
+        stripped = content.lstrip()
+        if stripped.startswith('{') or stripped.startswith('['):
+            messages = self._messages_from_json(stripped)
+            if messages is not None:
+                return self._questions_from_messages(messages)
+
+        messages = self._messages_from_csv(content)
+        if messages is not None:
+            return self._questions_from_messages(messages)
+
+        return self._parse_text_format(content)
+
+    # ---- Slack markup ----
+
+    @staticmethod
+    def clean_slack_markup(text: str) -> str:
+        """Strip Slack-specific markup so it doesn't pollute question grouping."""
+        # Fenced code blocks are usually logs/stack traces, not question text
+        text = re.sub(r'```.*?```', ' ', text, flags=re.DOTALL)
+        text = text.replace('`', '')
+        # <@U123> / <@U123|name> user mentions
+        text = re.sub(r'<@[A-Z0-9]+(?:\|[^>]*)?>', '', text)
+        # <#C123|channel-name> channel links
+        text = re.sub(r'<#[A-Z0-9]+\|([^>]*)>', r'#\1', text)
+        # <!here>, <!channel>, <!everyone> broadcasts
+        text = re.sub(r'<!(?:here|channel|everyone)>', '', text)
+        # <http://url|label> -> label, bare <http://url> -> dropped
+        text = re.sub(r'<https?://[^|>]+\|([^>]*)>', r'\1', text)
+        text = re.sub(r'<https?://[^>]+>', '', text)
+        # :emoji_codes:
+        text = re.sub(r':[a-z0-9_+\-]+:', '', text)
+        # HTML entities Slack escapes
+        text = text.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+        return re.sub(r'[ \t]+', ' ', text).strip()
+
+    # ---- Format-specific parsers ----
+
+    @staticmethod
+    def _slack_ts_to_date(ts) -> Optional[str]:
+        """Convert a Slack epoch timestamp ('1717589200.000200') to YYYY-MM-DD."""
+        try:
+            return datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime('%Y-%m-%d')
+        except (TypeError, ValueError, OSError, OverflowError):
+            return None
+
+    def _messages_from_json(self, content: str) -> Optional[List[Dict]]:
+        """Parse a Slack JSON export. Returns None when it isn't one."""
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError:
+            return None
+
+        if isinstance(data, dict):
+            data = data.get('messages')
+        if not isinstance(data, list):
+            return None
+
+        messages = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            text = item.get('text')
+            if not text or not isinstance(text, str):
+                continue
+            date = item.get('date') or self._slack_ts_to_date(item.get('ts'))
+            messages.append({'text': text, 'date': date})
+        return messages
+
+    _CSV_TEXT_COLUMNS = ('text', 'message', 'question', 'content', 'body')
+    _CSV_DATE_COLUMNS = ('date', 'ts', 'timestamp', 'time', 'datetime')
+
+    def _messages_from_csv(self, content: str) -> Optional[List[Dict]]:
+        """Parse CSV with a recognizable text column. Returns None otherwise."""
+        first_line = content.lstrip().split('\n', 1)[0]
+        if ',' not in first_line:
+            return None
+
+        try:
+            reader = csv.DictReader(io.StringIO(content.lstrip()))
+            headers = {h.strip().lower(): h for h in (reader.fieldnames or [])}
+        except csv.Error:
+            return None
+
+        text_col = next((headers[c] for c in self._CSV_TEXT_COLUMNS if c in headers), None)
+        if text_col is None:
+            return None
+        date_col = next((headers[c] for c in self._CSV_DATE_COLUMNS if c in headers), None)
+
+        messages = []
+        try:
+            for row in reader:
+                text = (row.get(text_col) or '').strip()
+                if not text:
+                    continue
+                date = (row.get(date_col) or '').strip() if date_col else None
+                # Numeric timestamps (Slack ts) get converted; date strings pass through
+                if date and re.fullmatch(r'\d{9,}(\.\d+)?', date):
+                    date = self._slack_ts_to_date(date)
+                messages.append({'text': text, 'date': date or None})
+        except csv.Error:
+            return None
+        return messages
+
+    def _questions_from_messages(self, messages: List[Dict]) -> List[Dict]:
+        """Extract questions from structured {'text', 'date'} messages."""
+        parsed_questions = []
+        for message in messages:
+            text = self.clean_slack_markup(message['text'].replace('\n', ' '))
+            for question in self.extract_questions(text):
+                parsed_questions.append({
+                    'text': question,
+                    'normalized_text': self.normalize_question(question),
+                    'date': message.get('date') or 'Unknown',
+                    'original_message': text[:200]
+                })
+        return parsed_questions
+
+    def _parse_text_format(self, content: str) -> List[Dict]:
+        """Parse plain text with dashed separator lines between messages."""
         # Split by separator line (a run of 10+ dashes on its own line)
         messages = re.split(r'\n-{10,}\n?|^-{10,}\n', content)
 
@@ -126,14 +257,18 @@ class QuestionExtractor:
                 if not line:
                     continue
 
-                # Try to parse as date
-                if not date and self._is_date_line(line):
-                    date = line
-                else:
-                    text_lines.append(line)
+                # Take the first date found; a line that is ONLY a date is
+                # consumed, but a line with a date AND text keeps its text
+                if not date:
+                    found, pure_date_line = self._extract_date(line)
+                    if found:
+                        date = found
+                        if pure_date_line:
+                            continue
+                text_lines.append(line)
 
-            # Join remaining text
-            text = ' '.join(text_lines)
+            # Join remaining text, stripping any pasted Slack markup
+            text = self.clean_slack_markup(' '.join(text_lines))
 
             # Extract questions from this message
             questions = self.extract_questions(text)
@@ -148,16 +283,23 @@ class QuestionExtractor:
 
         return parsed_questions
 
-    def _is_date_line(self, line: str) -> bool:
-        """Check if a line looks like a date."""
-        date_patterns = [
-            r'\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b',  # YYYY-MM-DD
-            r'\b\w+\s+\d{1,2},?\s+\d{4}\b',  # Month DD, YYYY
-            r'\b\d{1,2}[-/]\d{1,2}[-/]\d{4}\b',  # MM/DD/YYYY
-        ]
+    _DATE_PATTERNS = [
+        r'\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b',  # YYYY-MM-DD
+        r'\b\w+\s+\d{1,2},?\s+\d{4}\b',  # Month DD, YYYY
+        r'\b\d{1,2}[-/]\d{1,2}[-/]\d{4}\b',  # MM/DD/YYYY
+    ]
 
-        for pattern in date_patterns:
-            if re.search(pattern, line):
-                return True
+    def _extract_date(self, line: str):
+        """
+        Find a date in a line.
 
-        return False
+        Returns (date_string, is_pure_date_line): is_pure_date_line is True
+        when the line contains nothing meaningful besides the date.
+        """
+        for pattern in self._DATE_PATTERNS:
+            match = re.search(pattern, line)
+            if match:
+                rest = line[:match.start()] + line[match.end():]
+                rest_words = re.findall(r'[A-Za-z0-9]+', rest)
+                return match.group(0), len(rest_words) < 3
+        return None, False

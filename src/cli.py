@@ -30,7 +30,8 @@ def cli():
               help='Similarity threshold (0-1)')
 @click.option('--no-summary', is_flag=True, help='Skip printing summary to console')
 @click.option('--no-cache', is_flag=True, help='Disable the persistent embedding cache')
-def analyze(input_file, output, provider, threshold, no_summary, no_cache):
+@click.option('--no-labels', is_flag=True, help='Skip LLM-generated topic labels')
+def analyze(input_file, output, provider, threshold, no_summary, no_cache, no_labels):
     """
     Analyze questions from a Slack content file.
 
@@ -43,7 +44,8 @@ def analyze(input_file, output, provider, threshold, no_summary, no_cache):
         # Initialize analyzer
         click.echo(f"Initializing analyzer with provider: {provider or 'from .env (default: ollama)'}")
         analyzer = QuestionAnalyzer(provider=provider, use_disk_cache=not no_cache,
-                                    threshold=threshold)
+                                    threshold=threshold,
+                                    label_groups=False if no_labels else None)
         
         # Set default output path if not provided
         if not output:

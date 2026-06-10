@@ -348,10 +348,58 @@ class SimilarityAnalyzer:
         vec2 = np.array(embedding2).reshape(1, -1)
         return cosine_similarity(vec1, vec2)[0][0]
 
+    @staticmethod
+    def _lexical_similarity(text1: str, text2: str) -> float:
+        """Token-set Jaccard similarity — a cheap, AI-free first pass."""
+        tokens1, tokens2 = set(text1.split()), set(text2.split())
+        if not tokens1 or not tokens2:
+            return 0.0
+        return len(tokens1 & tokens2) / len(tokens1 | tokens2)
+
+    def _dedupe_questions(self, questions: List[Dict]) -> List[List[Dict]]:
+        """
+        Merge exact and near-duplicate questions WITHOUT any AI calls.
+
+        Tier 1: identical normalized text.
+        Tier 2: token-set Jaccard similarity >= LEXICAL_DEDUP_THRESHOLD
+                (default 0.9 — strict enough that only rewordings merge).
+
+        Returns buckets of questions; only one embedding is needed per bucket.
+        """
+        # Tier 1: exact duplicates
+        buckets: Dict[str, List[Dict]] = {}
+        order = []
+        for q in questions:
+            key = q['normalized_text']
+            if key not in buckets:
+                buckets[key] = []
+                order.append(key)
+            buckets[key].append(q)
+
+        # Tier 2: lexical near-duplicates
+        lexical_threshold = float(os.getenv('LEXICAL_DEDUP_THRESHOLD', '0.9'))
+        canonical = []
+        for key in order:
+            target = None
+            for ckey in canonical:
+                if self._lexical_similarity(key, ckey) >= lexical_threshold:
+                    target = ckey
+                    break
+            if target is not None:
+                buckets[target].extend(buckets.pop(key))
+            else:
+                canonical.append(key)
+
+        return [buckets[key] for key in canonical]
+
     def group_similar_questions(self, questions: List[Dict],
                                 progress_callback=None) -> List[Dict]:
         """
         Group similar questions together.
+
+        Exact and near-duplicate questions are merged with cheap string
+        comparison first, so the AI provider is only called for genuinely
+        distinct questions.
 
         Args:
             questions: List of question dictionaries with 'text' and 'normalized_text'
@@ -365,53 +413,71 @@ class SimilarityAnalyzer:
 
         print(f"Analyzing {len(questions)} questions...")
 
-        # Get embeddings for all normalized questions
-        texts = [q['normalized_text'] for q in questions]
+        # Tiers 1-2: merge duplicates without AI
+        buckets = self._dedupe_questions(questions)
+        if len(buckets) < len(questions):
+            print(f"Deduplicated to {len(buckets)} distinct questions "
+                  f"({len(questions) - len(buckets)} duplicates merged without AI)")
+
+        # A single distinct question needs no embeddings at all
+        if len(buckets) == 1:
+            if progress_callback:
+                progress_callback(0, 0)
+            bucket = buckets[0]
+            return [{
+                'representative_question': bucket[0]['text'],
+                'questions': bucket,
+                'count': len(bucket),
+                'avg_similarity': 1.0
+            }]
+
+        # Tier 3: semantic grouping — embed one representative per bucket
+        texts = [bucket[0]['normalized_text'] for bucket in buckets]
         embeddings = self.get_embeddings_batch(texts, progress_callback=progress_callback)
 
-        # Calculate similarity matrix
+        # Calculate similarity matrix between distinct questions
         similarity_matrix = cosine_similarity(embeddings)
 
-        # Group questions using clustering approach
+        # Group buckets using clustering approach
         groups = []
         assigned = set()
 
-        for i in range(len(questions)):
+        for i in range(len(buckets)):
             if i in assigned:
                 continue
 
-            # Start a new group with this question
+            # Start a new group with this bucket
             group_indices = [i]
             assigned.add(i)
 
-            # Find similar questions
-            for j in range(i + 1, len(questions)):
+            # Find similar buckets
+            for j in range(i + 1, len(buckets)):
                 if j in assigned:
                     continue
 
-                # Check similarity with all questions in current group
+                # Check similarity with all buckets in current group
                 max_similarity = max(similarity_matrix[j][idx] for idx in group_indices)
 
                 if max_similarity >= self.similarity_threshold:
                     group_indices.append(j)
                     assigned.add(j)
 
-            # Create group dictionary
-            group_questions = [questions[idx] for idx in group_indices]
+            # Expand buckets back into their member questions
+            group_questions = [q for idx in group_indices for q in buckets[idx]]
 
-            # Find the most representative question (closest to centroid)
+            # Find the most representative bucket (closest to centroid),
+            # weighted implicitly by being compared against all members
             if len(group_indices) > 1:
                 group_embeddings = embeddings[group_indices]
                 centroid = np.mean(group_embeddings, axis=0)
 
-                # Find question closest to centroid
                 distances = [np.linalg.norm(emb - centroid) for emb in group_embeddings]
                 representative_idx = group_indices[int(np.argmin(distances))]
-                representative = questions[representative_idx]['text']
+                representative = buckets[representative_idx][0]['text']
             else:
-                representative = questions[group_indices[0]]['text']
+                representative = buckets[group_indices[0]][0]['text']
 
-            # Calculate average pairwise similarity from the pre-computed matrix
+            # Average pairwise similarity between the distinct questions
             if len(group_indices) > 1:
                 similarities = []
                 for a in range(len(group_indices)):

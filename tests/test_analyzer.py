@@ -23,6 +23,7 @@ SAMPLE_CONTENT = (
 @pytest.fixture
 def analyzer(monkeypatch):
     monkeypatch.setenv('SIMILARITY_THRESHOLD', '0.85')
+    monkeypatch.setenv('GROUP_LABELS', 'off')  # keyword topics only; no LLM in tests
     analyzer = QuestionAnalyzer(provider='ollama', use_disk_cache=False)
 
     # Deterministic fake embeddings: password questions overlap, deploy doesn't
@@ -49,6 +50,7 @@ def test_full_pipeline(analyzer):
     group = results['groups'][0]
     assert group['count'] == 2
     assert 'password' in group['keywords']
+    assert group['topic']  # keyword-derived fallback label
     assert group['date_range'] == {'first_asked': '2024-01-05', 'last_asked': '2024-01-08'}
     assert results['metadata']['provider'] == 'ollama'
 

@@ -91,6 +91,60 @@ def test_batch_uses_cache_and_dedupes(monkeypatch):
     assert calls == []
 
 
+def test_exact_duplicates_need_no_embeddings(monkeypatch):
+    """Identical questions are grouped with zero AI calls."""
+    analyzer = make_analyzer(monkeypatch)
+    calls = []
+    monkeypatch.setattr(analyzer, '_ollama_embedding',
+                        lambda text: calls.append(text) or [1.0, 0.0])
+
+    questions = [question('How do I reset my password?') for _ in range(3)]
+    groups = analyzer.group_similar_questions(questions)
+
+    assert calls == []  # no embeddings fetched at all
+    assert len(groups) == 1
+    assert groups[0]['count'] == 3
+    assert groups[0]['avg_similarity'] == 1.0
+
+
+def test_duplicates_embed_once_per_distinct_question(monkeypatch):
+    analyzer = make_analyzer(monkeypatch)
+    vectors = {'how do i reset my password?': [1.0, 0.0],
+               'what is the deploy schedule?': [0.0, 1.0]}
+    calls = []
+
+    def fake_embedding(text):
+        calls.append(text)
+        return vectors[text]
+
+    monkeypatch.setattr(analyzer, '_ollama_embedding', fake_embedding)
+
+    questions = [question('How do I reset my password?'),
+                 question('How do I reset my password?'),
+                 question('What is the deploy schedule?')]
+    groups = analyzer.group_similar_questions(questions)
+
+    assert len(calls) == 2  # one embedding per distinct question, not three
+    assert groups[0]['count'] == 2
+    assert groups[1]['count'] == 1
+
+
+def test_lexical_near_duplicates_merge_without_ai(monkeypatch):
+    """Rewordings sharing >=90% of tokens merge before any embedding call."""
+    analyzer = make_analyzer(monkeypatch)
+    calls = []
+    monkeypatch.setattr(analyzer, '_ollama_embedding',
+                        lambda text: calls.append(text) or [1.0, 0.0])
+
+    base = 'how do i configure the antivirus scanner for inbound file transfers'
+    questions = [question(base), question(base + ' please')]
+    groups = analyzer.group_similar_questions(questions)
+
+    assert calls == []  # merged lexically; single bucket means no embeddings
+    assert len(groups) == 1
+    assert groups[0]['count'] == 2
+
+
 def test_embedding_cache_roundtrip(tmp_path):
     cache = EmbeddingCache('ollama', 'test-model', cache_dir=str(tmp_path))
     assert cache.get('hello') is None

@@ -80,6 +80,7 @@ def compute_weekly_stats(results: Dict) -> Optional[Dict]:
     for group in results.get('groups', []):
         rows.append({
             'question': group['representative_question'],
+            'topic': group.get('topic'),
             'keywords': group.get('keywords', []),
             'similarity': f"{round(group['avg_similarity'] * 100)}%",
             'questions': _dated_questions(group['questions']),
@@ -87,6 +88,7 @@ def compute_weekly_stats(results: Dict) -> Optional[Dict]:
     for q in results.get('ungrouped_questions', []):
         rows.append({
             'question': q['text'],
+            'topic': None,
             'keywords': [],
             'similarity': '—',
             'questions': _dated_questions([q]),
@@ -140,6 +142,7 @@ def compute_weekly_stats(results: Dict) -> Optional[Dict]:
             'count': len(row['this_week']),
             'similarity': row['similarity'],
             'question': row['question'],
+            'topic': row['topic'],
             'keywords': row['keywords'],
             'movement': movement,
             'questions': [

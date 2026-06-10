@@ -76,7 +76,7 @@ function DashboardView() {
         {groups.map((g, i) => (
           <RankedRow key={g.rank} rank={g.rank} index={i} question={g.question} count={g.count}
             maxCount={max} keywords={g.keywords} similarity={g.similarity} questions={g.questions}
-            defaultOpen={i === 0 && !query} />
+            topic={g.topic} summary={g.summary} defaultOpen={i === 0 && !query} />
         ))}
         {groups.length === 0 ? <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-helper)', borderBottom: '1px solid var(--border-subtle)' }}>No topics match “{query}”.</div> : null}
       </div>
@@ -89,16 +89,18 @@ window.DashboardView = DashboardView;
 function transformAnalysisResults(results) {
   if (!results || !results.groups) return window.DASHBOARD_DATA;
   
+  const fallbackTopic = (g) => g.representative_question.split(' ').slice(0, 3).join(' ') + '...';
   return {
     totalQuestions: results.total_questions || 0,
     totalGroups: results.total_groups || 0,
     resolved: 0, // Not tracked yet
-    topTopic: results.groups[0] ? results.groups[0].representative_question.split(' ').slice(0, 3).join(' ') + '...' : 'N/A',
+    topTopic: results.groups[0] ? (results.groups[0].topic || fallbackTopic(results.groups[0])) : 'N/A',
     groups: results.groups.map((g, i) => ({
       rank: i + 1,
       count: g.count,
       similarity: `${Math.round(g.avg_similarity * 100)}%`,
-      topic: g.representative_question.split(' ').slice(0, 3).join(' ') + '...',
+      topic: g.topic || null,
+      summary: g.summary || null,
       question: g.representative_question,
       keywords: g.keywords || [],
       questions: g.questions || []

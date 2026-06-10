@@ -1,6 +1,7 @@
 // Animated, expandable ranked question row — shared by Dashboard & Week.
 function RankedRow({ rank, question, count, maxCount, keywords = [], movement = null,
-  similarity = null, questions = null, index = 0, defaultOpen = false }) {
+  similarity = null, questions = null, index = 0, defaultOpen = false,
+  topic = null, summary = null }) {
   const [open, setOpen] = React.useState(defaultOpen);
   const [hover, setHover] = React.useState(false);
   const [shown, setShown] = React.useState(false);
@@ -31,6 +32,7 @@ function RankedRow({ rank, question, count, maxCount, keywords = [], movement = 
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 18, color: heat, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{String(rank).padStart(2, '0')}</span>
         {movement != null ? <span><MovementBadge movement={movement} /></span> : null}
         <span style={{ minWidth: 0 }}>
+          {topic ? <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.04em', textTransform: 'uppercase', color: heat, marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{topic}</div> : null}
           <div style={{ fontSize: 15, color: 'var(--text-primary)', lineHeight: 1.3, whiteSpace: open ? 'normal' : 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{question}</div>
           {keywords.length ? (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 6 }}>
@@ -50,6 +52,7 @@ function RankedRow({ rank, question, count, maxCount, keywords = [], movement = 
       {expandable ? (
         <div style={{ maxHeight: open ? bodyH : 0, overflow: 'hidden', transition: 'max-height var(--duration-slow) var(--ease-productive)' }}>
           <div ref={bodyRef} style={{ padding: '0 20px 18px', marginLeft: movement != null ? 98 : 50 }}>
+            {summary ? <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 10, fontStyle: 'italic' }}>{summary}</div> : null}
             {similarity ? <div style={{ fontSize: 12, color: 'var(--text-helper)', marginBottom: 10 }}>Avg. similarity <b style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>{similarity}</b> · {questions.length} occurrences</div> : null}
             <ul style={{ listStyle: 'none', margin: 0, padding: 0, borderLeft: '1px solid var(--border-subtle)' }}>
               {questions.map((q, i) => (
