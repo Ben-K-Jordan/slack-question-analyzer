@@ -345,9 +345,18 @@ def health_check():
             response.raise_for_status()
             models = [m.get('name', '') for m in response.json().get('models', [])]
             model_available = any(name == model or name.startswith(f"{model}:") for name in models)
-            label_model = os.getenv('OLLAMA_GENERATION_MODEL', 'llama3.2')
-            label_available = any(name == label_model or name.startswith(f"{label_model}:")
-                                  for name in models)
+            from slack_question_analyzer.model_defaults import (
+                default_generation_model, FALLBACK_GENERATION_MODEL)
+            label_model = default_generation_model()
+            def _downloaded(m):
+                return any(name == m or name.startswith(f"{m}:") for name in models)
+            label_available = _downloaded(label_model)
+            # Mirror GroupLabeler's runtime fallback: if only the small chat
+            # model is downloaded, that's what will actually be used — report
+            # it (and don't nag the user to download the big one)
+            if (not label_available and not os.getenv('OLLAMA_GENERATION_MODEL')
+                    and _downloaded(FALLBACK_GENERATION_MODEL)):
+                label_model, label_available = FALLBACK_GENERATION_MODEL, True
             health['ollama'] = {'reachable': True, 'model': model,
                                 'model_available': model_available,
                                 'label_model': label_model,
@@ -466,8 +475,11 @@ _pulls_lock = threading.Lock()
 
 
 def _pullable_models():
+    from slack_question_analyzer.model_defaults import (
+        default_generation_model, PREFERRED_GENERATION_MODEL, FALLBACK_GENERATION_MODEL)
     return {os.getenv('OLLAMA_MODEL', 'nomic-embed-text'),
-            os.getenv('OLLAMA_GENERATION_MODEL', 'llama3.2')}
+            default_generation_model(),
+            PREFERRED_GENERATION_MODEL, FALLBACK_GENERATION_MODEL}
 
 
 def _run_model_pull(model):
