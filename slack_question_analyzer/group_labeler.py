@@ -139,11 +139,17 @@ VERIFY_SYSTEM = (
 
 SUMMARY_SYSTEM = (
     "You write a brief executive summary of support-question analytics for a team lead. "
-    "2-3 sentences: the dominant themes, with concrete topic names and counts, plus "
-    "anything notable (spikes, new topics). No filler, no preamble, no advice.\n"
-    "Example: {\"summary\": \"Antivirus scanning dominates this period with 12 "
-    "questions, followed by metering setup (7). Cluster failover questions appeared "
-    "for the first time.\"}\n"
+    "2-3 sentences: the dominant themes, with concrete topic names and counts. "
+    "No filler, no preamble, no advice.\n"
+    "Rules:\n"
+    "- Use ONLY each topic's own question count exactly as listed. The total "
+    "question count is NOT a topic's count — never attach it to a topic.\n"
+    "- Mention topics in the order listed (they are ranked).\n"
+    "- If several topics tie, say they are evenly spread rather than calling "
+    "one dominant.\n"
+    "Example input: 'Total questions analyzed: 12' with topics 'Backups - 2', "
+    "'Login Errors - 2'. Example output: {\"summary\": \"The 12 questions are "
+    "evenly spread, led by Backups (2) and Login Errors (2).\"}\n"
     "Respond with JSON only."
 )
 

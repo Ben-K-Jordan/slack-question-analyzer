@@ -192,6 +192,7 @@ function DashboardView({ onUpload }) {
             <h1 style={{ fontSize: 32, fontWeight: 300, letterSpacing: '-.02em', margin: '0 0 6px' }}>Most-asked questions</h1>
             <div style={{ fontSize: 14, color: 'var(--text-secondary)' }}>
               All-time across your monitored Slack channels · ranked by occurrences
+              {d.groupingBar ? <span title="Questions group together only above this similarity (auto-raised above your corpus's noise level); pairs below it require AI confirmation" style={{ marginLeft: 8, fontSize: 11.5, fontFamily: 'var(--font-mono)', color: 'var(--text-helper)' }}>grouping bar {Math.round(d.groupingBar * 100)}%</span> : null}
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -271,7 +272,7 @@ function DashboardView({ onUpload }) {
         {groups.slice(0, visibleCount).map((g, i) => (
           <RankedRow key={g.rank} rank={g.rank} index={i} question={g.question} count={g.count}
             maxCount={max} keywords={g.keywords} similarity={g.similarity} questions={g.questions}
-            topic={g.topic} summary={g.summary} seenIn={g.seenIn}
+            topic={g.topic} summary={g.summary} seenIn={g.seenIn} aiConfirmed={g.aiConfirmed}
             onRenameTopic={g.topicId ? (name) => renameTopic(g.topicId, name) : null}
             defaultOpen={i === 0 && !query} />
         ))}
@@ -333,6 +334,7 @@ function transformAnalysisResults(results) {
     resolved: results.answered_questions || 0, // LLM answer detection (threads only)
     executiveSummary: results.executive_summary || null,
     ungrouped: results.ungrouped_questions || [],
+    groupingBar: (results.metadata && results.metadata.effective_threshold) || null,
     thresholdHint: thresholdHint(results),
     autoAdjusted: (results.metadata && results.metadata.threshold_auto_adjusted)
       ? results.metadata.similarity_threshold : null,
@@ -345,6 +347,9 @@ function transformAnalysisResults(results) {
       summary: g.summary || null,
       seenIn: g.seen_in_analyses || 0,
       topicId: g.topic_id || null,
+      // Below the numeric bar means the AI verifier approved this merge
+      aiConfirmed: !!(results.metadata && results.metadata.effective_threshold
+        && g.avg_similarity < results.metadata.effective_threshold),
       question: g.representative_question,
       keywords: g.keywords || [],
       questions: g.questions || []
