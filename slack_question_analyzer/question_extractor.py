@@ -62,9 +62,13 @@ class QuestionExtractor:
         r'(?:\s+(?:team|all|everyone|folks|guys|there))?[\s,!.:-]+)+',
         re.IGNORECASE)
 
+    # Leading list markers ('* ', '- ', '3. ', '>') from Slack formatting
+    _BULLET = re.compile(r'^(?:[*\-•>]+|\d{1,2}[.)])\s+')
+
     def strip_greeting(self, question: str) -> str:
-        """Remove a leading greeting ('Hi Team, ...') from a question."""
+        """Remove leading greetings and list markers from a question."""
         stripped = self._GREETING.sub('', question).strip()
+        stripped = self._BULLET.sub('', stripped).strip()
         return stripped if stripped else question
 
     def extract_questions(self, text: str) -> List[str]:
