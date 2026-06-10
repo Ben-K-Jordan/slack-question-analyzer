@@ -7,6 +7,7 @@ import logging
 import click
 from pathlib import Path
 from .analyzer import QuestionAnalyzer
+from .inputs import load_input_files
 
 
 @click.group()
@@ -25,7 +26,7 @@ def cli(verbose):
 
 
 @cli.command()
-@click.argument('input_file', type=click.Path(exists=True))
+@click.argument('input_files', type=click.Path(exists=True), nargs=-1, required=True)
 @click.option('--output', '-o', type=click.Path(),
               help='Output file path (.json, .csv, or .md — format inferred from extension)')
 @click.option('--provider', '-p', type=click.Choice(['ollama', 'azure', 'openai']),
@@ -35,14 +36,17 @@ def cli(verbose):
 @click.option('--no-summary', is_flag=True, help='Skip printing summary to console')
 @click.option('--no-cache', is_flag=True, help='Disable the persistent embedding cache')
 @click.option('--no-labels', is_flag=True, help='Skip LLM-generated topic labels')
-def analyze(input_file, output, provider, threshold, no_summary, no_cache, no_labels):
+def analyze(input_files, output, provider, threshold, no_summary, no_cache, no_labels):
     """
-    Analyze questions from a Slack content file.
+    Analyze questions from one or more Slack content files.
 
-    INPUT_FILE: Path to file containing Slack messages/questions
+    INPUT_FILES: .json/.txt/.csv files and/or .zip archives (e.g. a zipped
+    Slack export); everything is merged and analyzed as a single corpus.
 
-    Example:
+    Examples:
         slack-analyzer analyze slack_content.txt -o results.json
+        slack-analyzer analyze slack-export.zip -o report.md
+        slack-analyzer analyze week1.json week2.json -o combined.md
     """
     try:
         # Initialize analyzer
@@ -50,22 +54,24 @@ def analyze(input_file, output, provider, threshold, no_summary, no_cache, no_la
         analyzer = QuestionAnalyzer(provider=provider, use_disk_cache=not no_cache,
                                     threshold=threshold,
                                     label_groups=False if no_labels else None)
-        
+
         # Set default output path if not provided
         if not output:
-            input_path = Path(input_file)
+            input_path = Path(input_files[0])
             output = input_path.parent / f"{input_path.stem}_analysis.json"
-        
+
         # Run analysis
-        click.echo(f"\nAnalyzing: {input_file}")
-        results = analyzer.analyze_from_file(input_file, str(output))
-        
+        click.echo(f"\nAnalyzing: {', '.join(input_files)}")
+        contents = load_input_files(input_files)
+        results = analyzer.analyze_contents(contents)
+        analyzer.save_results(results, str(output))
+
         # Print summary unless disabled
         if not no_summary:
             analyzer.print_summary(results)
-        
+
         click.echo(f"\nAnalysis complete! Results saved to: {output}")
-        
+
     except FileNotFoundError as e:
         click.echo(f"Error: File not found - {e}", err=True)
         sys.exit(1)
@@ -160,9 +166,9 @@ def setup():
         "EXECUTIVE_SUMMARY=auto",
     ])
     
-    # Write .env file
+    # Write .env file (UTF-8 explicitly: Windows defaults to a legacy codepage)
     env_path = Path('.env')
-    with open(env_path, 'w') as f:
+    with open(env_path, 'w', encoding='utf-8') as f:
         f.write('\n'.join(env_content))
     
     click.echo(f"\nConfiguration saved to {env_path}")
@@ -179,14 +185,13 @@ def validate(input_file):
     """
     try:
         from .question_extractor import QuestionExtractor
-        
+
         click.echo(f"Validating: {input_file}\n")
-        
-        with open(input_file, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
+
         extractor = QuestionExtractor()
-        questions = extractor.parse_slack_content(content)
+        questions = []
+        for content in load_input_files([input_file]):
+            questions.extend(extractor.parse_slack_content(content))
         
         click.echo("File is valid!")
         click.echo("\nStatistics:")

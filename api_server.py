@@ -32,6 +32,7 @@ from dotenv import load_dotenv
 from slack_question_analyzer.analyzer import QuestionAnalyzer
 from slack_question_analyzer.weekly_stats import compute_weekly_stats
 from slack_question_analyzer.exporters import to_csv, to_markdown
+from slack_question_analyzer.inputs import contents_from_zip_bytes
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -363,36 +364,6 @@ def health_check():
     return jsonify(health)
 
 
-TEXT_EXTENSIONS = ('.json', '.txt', '.csv')
-
-
-def _contents_from_zip(raw_bytes):
-    """Extract text contents from a zipped Slack export (zip-bomb guarded)."""
-    import io
-    import zipfile
-
-    limit = MAX_CONTENT_MB * 1024 * 1024
-    total = 0
-    contents = []
-    with zipfile.ZipFile(io.BytesIO(raw_bytes)) as archive:
-        for info in archive.infolist():
-            if info.is_dir():
-                continue
-            name = info.filename
-            base = name.rsplit('/', 1)[-1]
-            if name.startswith('__MACOSX') or base.startswith('.'):
-                continue
-            if not base.lower().endswith(TEXT_EXTENSIONS):
-                continue
-            total += info.file_size
-            if total > limit:
-                raise ValueError(f'Zip contents exceed the {MAX_CONTENT_MB}MB limit')
-            contents.append(archive.read(info).decode('utf-8', errors='replace'))
-    if not contents:
-        raise ValueError('Zip contains no .json, .txt, or .csv files')
-    return contents
-
-
 def _contents_from_upload():
     """Contents from a multipart upload: plain files and/or .zip archives."""
     files = request.files.getlist('files')
@@ -405,7 +376,8 @@ def _contents_from_upload():
     for storage in files:
         raw = storage.read()
         if (storage.filename or '').lower().endswith('.zip'):
-            contents.extend(_contents_from_zip(raw))
+            contents.extend(contents_from_zip_bytes(
+                raw, max_bytes=MAX_CONTENT_MB * 1024 * 1024))
         else:
             contents.append(raw.decode('utf-8', errors='replace'))
     return contents

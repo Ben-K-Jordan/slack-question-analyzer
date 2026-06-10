@@ -20,6 +20,7 @@ function DashboardView() {
   const d = analysisResults ? transformAnalysisResults(analysisResults) : window.DASHBOARD_DATA;
   const [query, setQuery] = React.useState('');
   const [visibleCount, setVisibleCount] = React.useState(PAGE_SIZE);
+  const [showUnique, setShowUnique] = React.useState(false);
 
   const exportBtn = {
     height: 32, padding: '0 12px', display: 'inline-flex', alignItems: 'center', gap: 6,
@@ -34,6 +35,8 @@ function DashboardView() {
     g.question.toLowerCase().includes(query.toLowerCase()) ||
     g.keywords.join(' ').includes(query.toLowerCase()) ||
     (g.topic && g.topic.toLowerCase().includes(query.toLowerCase()))) : [];
+  const uniqueQuestions = (d.ungrouped || []).filter((q) =>
+    q.text.toLowerCase().includes(query.toLowerCase()));
 
   const stat = (label, value, accent) => (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -122,6 +125,28 @@ function DashboardView() {
           Show {Math.min(PAGE_SIZE, groups.length - visibleCount)} more · {groups.length - visibleCount} remaining
         </button>
       ) : null}
+
+      {uniqueQuestions.length ? (
+        <div style={{ marginTop: 28 }}>
+          <button onClick={() => setShowUnique(!showUnique)}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)', padding: 0 }}>
+            <span style={{ display: 'inline-flex', transform: showUnique ? 'rotate(90deg)' : 'none', transition: 'transform var(--duration-base) var(--ease-productive)' }}>
+              <Icon name="chevron-right" size={14} />
+            </span>
+            Unique questions ({uniqueQuestions.length}) — asked only once
+          </button>
+          {showUnique ? (
+            <ul style={{ listStyle: 'none', margin: '12px 0 0', padding: 0, borderLeft: '1px solid var(--border-subtle)' }}>
+              {uniqueQuestions.map((q, i) => (
+                <li key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 16, padding: '8px 16px' }}>
+                  <span style={{ fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>{q.text}</span>
+                  {q.date && q.date !== 'Unknown' ? <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-placeholder)', whiteSpace: 'nowrap' }}>{q.date}</span> : null}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -137,6 +162,7 @@ function transformAnalysisResults(results) {
     totalGroups: results.total_groups || 0,
     resolved: results.answered_questions || 0, // LLM answer detection (threads only)
     executiveSummary: results.executive_summary || null,
+    ungrouped: results.ungrouped_questions || [],
     topTopic: results.groups[0] ? (results.groups[0].topic || fallbackTopic(results.groups[0])) : 'N/A',
     groups: results.groups.map((g, i) => ({
       rank: i + 1,

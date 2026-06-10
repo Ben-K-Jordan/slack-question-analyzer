@@ -66,6 +66,31 @@ def test_analyze_markdown_output(fake_engine, input_file, tmp_path):
     assert '# Question Analysis Report' in report
 
 
+def test_analyze_zip_and_multiple_files(fake_engine, input_file, tmp_path):
+    """The CLI accepts zip archives and multiple inputs, like the web UI."""
+    import io
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w') as archive:
+        archive.writestr('export/day1.txt', SAMPLE_CONTENT)
+    zip_path = tmp_path / 'export.zip'
+    zip_path.write_bytes(buffer.getvalue())
+
+    extra = tmp_path / 'extra.json'
+    extra.write_text(json.dumps([{'text': 'How can I reset my password?'}]),
+                     encoding='utf-8')
+
+    output = tmp_path / 'combined.json'
+    result = CliRunner().invoke(cli, ['analyze', str(zip_path), str(extra),
+                                      '-o', str(output), '--no-cache', '--no-labels',
+                                      '--no-summary'])
+
+    assert result.exit_code == 0, result.output
+    saved = json.loads(output.read_text(encoding='utf-8'))
+    assert saved['total_questions'] == 4  # 3 from the zip + 1 from the json
+
+
 def test_analyze_rejects_bad_threshold(input_file):
     result = CliRunner().invoke(cli, ['analyze', str(input_file), '--threshold', '2'])
     assert result.exit_code != 0

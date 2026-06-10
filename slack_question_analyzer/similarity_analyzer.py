@@ -5,12 +5,8 @@ Groups similar questions together using semantic similarity.
 """
 
 import os
-import json
 import time
 import logging
-import hashlib
-import tempfile
-from pathlib import Path
 from typing import List, Dict, Literal, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -20,6 +16,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 from openai import AzureOpenAI, OpenAI
 from dotenv import load_dotenv
 
+from .disk_cache import JsonDiskCache
+
 logger = logging.getLogger(__name__)
 
 
@@ -27,7 +25,7 @@ class EmbeddingError(Exception):
     """Raised when embeddings could not be retrieved from the provider."""
 
 
-class EmbeddingCache:
+class EmbeddingCache(JsonDiskCache):
     """
     Persistent embedding cache backed by a JSON file.
 
@@ -38,47 +36,8 @@ class EmbeddingCache:
 
     def __init__(self, provider: str, model: str, cache_dir: Optional[str] = None,
                  enabled: bool = True):
-        self.enabled = enabled
-        self._memory: Dict[str, List[float]] = {}
-        self._dirty = False
-
         cache_dir = cache_dir or os.getenv('EMBEDDING_CACHE_DIR', '.embedding_cache')
-        safe_model = ''.join(c if c.isalnum() or c in '-_.' else '_' for c in model)
-        self.cache_path = Path(cache_dir) / f"{provider}_{safe_model}.json"
-
-        if self.enabled and self.cache_path.exists():
-            try:
-                with open(self.cache_path, 'r', encoding='utf-8') as f:
-                    self._memory = json.load(f)
-            except (json.JSONDecodeError, OSError):
-                # Corrupt or unreadable cache: start fresh rather than failing
-                self._memory = {}
-
-    @staticmethod
-    def _key(text: str) -> str:
-        return hashlib.sha256(text.encode('utf-8')).hexdigest()
-
-    def get(self, text: str) -> Optional[List[float]]:
-        return self._memory.get(self._key(text))
-
-    def set(self, text: str, embedding: List[float]):
-        self._memory[self._key(text)] = embedding
-        self._dirty = True
-
-    def save(self):
-        """Persist the cache to disk (atomic write)."""
-        if not self.enabled or not self._dirty:
-            return
-        try:
-            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_path = tempfile.mkstemp(dir=self.cache_path.parent, suffix='.tmp')
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                json.dump(self._memory, f)
-            os.replace(tmp_path, self.cache_path)
-            self._dirty = False
-        except OSError as e:
-            # Cache persistence is best-effort; analysis results are unaffected
-            logger.warning("Could not save embedding cache: %s", e)
+        super().__init__(provider, model, cache_dir, enabled=enabled)
 
 
 class SimilarityAnalyzer:

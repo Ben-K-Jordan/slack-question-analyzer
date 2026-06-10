@@ -80,10 +80,13 @@ ollama pull nomic-embed-text
 
 ### Basic Analysis
 
-Analyze a file containing Slack questions:
+Analyze one or more files containing Slack questions — plain files, several at
+once, or a zipped Slack export (everything merges into a single corpus):
 
 ```bash
 slack-analyzer analyze example_input.txt
+slack-analyzer analyze slack-export.zip -o report.md
+slack-analyzer analyze week1.json week2.json -o combined.md
 ```
 
 ### Save Results to JSON
@@ -118,16 +121,18 @@ slack-analyzer analyze example_input.txt -o results.csv    # one row per questio
 slack-analyzer analyze example_input.txt -o report.md      # readable report
 ```
 
-### Embedding Cache
+### Caching
 
-Embeddings are cached in `.embedding_cache/` (one file per provider/model), making
-repeat runs near-instant. To bypass it:
+Embeddings are cached in `.embedding_cache/` and LLM outputs (topic labels,
+summaries, verdicts — deterministic at temperature 0) in `.llm_cache/`, one file per
+provider/model. Re-analyzing the same transcript costs zero provider calls. To bypass:
 
 ```bash
-slack-analyzer analyze example_input.txt --no-cache
+slack-analyzer analyze example_input.txt --no-cache   # embeddings only
 ```
 
-You can also set `EMBEDDING_CACHE=off` or `EMBEDDING_CACHE_DIR=/path/to/cache` in `.env`.
+Env switches: `EMBEDDING_CACHE=off`, `LLM_CACHE=off`, `EMBEDDING_CACHE_DIR`,
+`LLM_CACHE_DIR`.
 
 ### Validate Input File
 

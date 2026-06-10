@@ -3,9 +3,16 @@
 import json
 
 import numpy as np
+import pytest
 
 from slack_question_analyzer.group_labeler import GroupLabeler
 from slack_question_analyzer.analyzer import QuestionAnalyzer
+
+
+@pytest.fixture(autouse=True)
+def isolated_llm_cache(tmp_path, monkeypatch):
+    """Keep each test's LLM result cache in its own temp directory."""
+    monkeypatch.setenv('LLM_CACHE_DIR', str(tmp_path / 'llm_cache'))
 
 
 class FakeResponse:
@@ -97,6 +104,21 @@ def test_label_group_returns_none_when_retry_also_fails(monkeypatch):
     assert GroupLabeler('ollama').label_group(['Anything?']) is None
 
 
+def test_label_results_are_cached_on_disk(monkeypatch):
+    """Identical prompts are served from the cache, even across instances."""
+    captured = []
+    patch_chat(monkeypatch,
+               ['{"topic": "Password Reset", "summary": "How to reset passwords."}'],
+               captured)
+
+    first = GroupLabeler('ollama').label_group(['How do I reset my password?'])
+    # A brand-new instance with the same prompt must not hit the model again
+    second = GroupLabeler('ollama').label_group(['How do I reset my password?'])
+
+    assert first == second
+    assert len(captured) == 1  # one real chat call total
+
+
 def test_label_group_returns_none_on_connection_failure(monkeypatch):
     def boom(*args, **kwargs):
         raise ConnectionError('refused')
@@ -118,8 +140,9 @@ def test_verify_same_topic(monkeypatch):
     patch_chat(monkeypatch, ['{"same_topic": false}'])
     assert GroupLabeler('ollama').verify_same_topic(['a?'], ['b?']) is False
 
+    # Different questions (a fresh prompt) so the cached verdict above isn't reused
     patch_chat(monkeypatch, ['{"same_topic": "maybe"}'])
-    assert GroupLabeler('ollama').verify_same_topic(['a?'], ['b?']) is None
+    assert GroupLabeler('ollama').verify_same_topic(['c?'], ['d?']) is None
 
 
 def test_summarize_analysis(monkeypatch):
