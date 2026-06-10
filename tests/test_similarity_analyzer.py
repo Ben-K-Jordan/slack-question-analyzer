@@ -581,3 +581,55 @@ def test_ranking_breaks_count_ties_by_cohesion(monkeypatch):
     assert [g['count'] for g in groups] == [2, 2]
     # Tighter group ranks first despite equal counts
     assert groups[0]['avg_similarity'] > groups[1]['avg_similarity']
+
+
+def test_known_topics_claim_questions_despite_low_pairwise_similarity(monkeypatch):
+    """
+    Funnel stage 1: two questions whose PAIRWISE similarity is below the bar
+    still group when both score high against the same curated category. This
+    is the fix for 0-groups runs where obviously-related questions (two Azure
+    token questions) sat just under an adaptive bar.
+    """
+    analyzer = make_analyzer(monkeypatch, threshold='0.85')
+    # Both questions at ~0.90 to the category centroid (1,0,0), but only
+    # ~0.62 to each other
+    fake = np.array([[0.9, 0.435, 0.0], [0.9, -0.435, 0.0]])
+    monkeypatch.setattr(analyzer, 'get_embeddings_batch',
+                        lambda texts, progress_callback=None: fake)
+    topics = [{'topic': 'Azure Token Support', 'centroid': [1.0, 0.0, 0.0]}]
+
+    questions = [question('Why does a container-level token fail against Azure Blob?'),
+                 question('Do we support container-level tokens in Azure Blob?')]
+    groups = analyzer.group_similar_questions(questions, known_topics=topics)
+    assert len(groups) == 1
+    assert groups[0]['count'] == 2
+
+
+def test_single_known_topic_claim_released_to_clustering(monkeypatch):
+    """A category claiming only ONE question must not lock it away from
+    normal clustering (it could still pair with an unclaimed question)."""
+    analyzer = make_analyzer(monkeypatch, threshold='0.75')
+    # q0 matches the category; q1 doesn't, but q0/q1 are 0.81 similar
+    fake = np.array([[1.0, 0.0], [0.81, float(np.sqrt(1 - 0.81 ** 2))]])
+    monkeypatch.setattr(analyzer, 'get_embeddings_batch',
+                        lambda texts, progress_callback=None: fake)
+    topics = [{'topic': 'Some Category', 'centroid': [1.0, 0.0]}]
+
+    questions = [question('How do I reset my password?'),
+                 question('Steps for changing my password?')]
+    groups = analyzer.group_similar_questions(questions, known_topics=topics)
+    assert len(groups) == 1  # still paired by normal clustering
+    assert groups[0]['count'] == 2
+
+
+def test_known_topics_with_wrong_dimensions_are_ignored(monkeypatch):
+    analyzer = make_analyzer(monkeypatch, threshold='0.85')
+    fake = np.array([[1.0, 0.0], [0.0, 1.0]])
+    monkeypatch.setattr(analyzer, 'get_embeddings_batch',
+                        lambda texts, progress_callback=None: fake)
+    topics = [{'topic': 'Legacy Entry', 'centroid': [1.0, 0.0, 0.0, 0.0]}]
+
+    questions = [question('a question about one thing?'),
+                 question('a question about another thing?')]
+    groups = analyzer.group_similar_questions(questions, known_topics=topics)
+    assert len(groups) == 2  # no crash, no bogus claims

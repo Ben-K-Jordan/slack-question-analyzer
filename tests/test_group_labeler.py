@@ -247,7 +247,7 @@ def stub_llm(monkeypatch, analyzer, **methods):
     monkeypatch.setattr(analyzer.labeler, 'available', lambda: True)
     # Default: LLM-first extraction "fails" so the regex fallback runs,
     # keeping older tests' question sets unchanged
-    methods.setdefault('extract_questions', lambda texts: None)
+    methods.setdefault('extract_questions', lambda texts, thorough=False: None)
     for name, fn in methods.items():
         monkeypatch.setattr(analyzer.labeler, name, fn)
 
@@ -329,7 +329,7 @@ def test_full_llm_extraction_mode(monkeypatch):
     stub_llm(monkeypatch, analyzer,
              label_group=lambda texts, keywords=None: None,
              verify_same_topic=lambda a, b: None,
-             extract_questions=lambda texts: [
+             extract_questions=lambda texts, thorough=False: [
                  {'index': 0, 'question': 'Does the Metering Agent come pre-installed?'}
              ] if 'pre-installed' in texts[0] else [],
              summarize_analysis=lambda groups, total: None)
@@ -347,7 +347,7 @@ def test_full_extraction_falls_back_to_regex_on_llm_failure(monkeypatch):
     stub_llm(monkeypatch, analyzer,
              label_group=lambda texts, keywords=None: None,
              verify_same_topic=lambda a, b: None,
-             extract_questions=lambda texts: None,  # LLM call failed
+             extract_questions=lambda texts, thorough=False: None,  # LLM call failed
              summarize_analysis=lambda groups, total: None)
 
     results = analyzer.analyze_slack_content(SAMPLE_CONTENT)
@@ -362,7 +362,7 @@ def test_auto_mode_defaults_to_llm_extraction_for_small_transcripts(monkeypatch)
     stub_llm(monkeypatch, analyzer,
              label_group=lambda texts, keywords=None: None,
              verify_same_topic=lambda a, b: None,
-             extract_questions=lambda texts: [
+             extract_questions=lambda texts, thorough=False: [
                  {'index': 0, 'question': 'Does the agent come pre-installed?'}],
              summarize_analysis=lambda groups, total: None)
 
@@ -530,3 +530,94 @@ def test_warm_up_loads_both_models_when_split(monkeypatch):
     loaded = [c['body']['model'] for c in captured]
     assert loaded == ['llama3.2', 'llama3.1:8b']  # fast first, quality after
     assert all(c['body']['messages'] == [] for c in captured)
+
+
+# ---- Extraction safety net ----
+
+def test_safety_net_recovers_batch_the_fast_model_skipped(monkeypatch):
+    """A fast model wrongly answering 'no questions here' must not silently
+    lose a conversation: the quality model gets a second look."""
+    monkeypatch.setenv('LLM_EXTRACTION', 'full')
+    vectors = {'how do i configure iwhi monitoring?': [1.0, 0.0]}
+    analyzer = make_analyzer(monkeypatch, vectors=vectors, label_groups=True)
+
+    def extract(texts, thorough=False):
+        if thorough:
+            return [{'index': 0, 'question': 'How do I configure IWHI monitoring?'}]
+        return []  # fast model: "no questions here" (wrong)
+
+    stub_llm(monkeypatch, analyzer,
+             label_group=lambda texts, keywords=None: None,
+             verify_same_topic=lambda a, b: None,
+             extract_questions=extract,
+             summarize_analysis=lambda groups, total: None)
+
+    results = analyzer.analyze_slack_content(
+        "2024-01-05\nHow do I configure IWHI monitoring?\n")
+    assert results['total_questions'] == 1
+    assert results['ungrouped_questions'][0]['text'] == 'How do I configure IWHI monitoring?'
+
+
+def test_safety_net_falls_back_to_regex_when_both_models_skip(monkeypatch):
+    monkeypatch.setenv('LLM_EXTRACTION', 'full')
+    vectors = {'how do i configure iwhi monitoring?': [1.0, 0.0]}
+    analyzer = make_analyzer(monkeypatch, vectors=vectors, label_groups=True)
+    stub_llm(monkeypatch, analyzer,
+             label_group=lambda texts, keywords=None: None,
+             verify_same_topic=lambda a, b: None,
+             extract_questions=lambda texts, thorough=False: [],
+             summarize_analysis=lambda groups, total: None)
+
+    results = analyzer.analyze_slack_content(
+        "2024-01-05\nHow do I configure IWHI monitoring?\n")
+    assert results['total_questions'] == 1  # regex version kept
+
+
+# ---- Theme funnel ----
+
+def test_assign_themes_maps_one_based_indices(monkeypatch):
+    labeler = GroupLabeler(provider='ollama')
+    patch_chat(monkeypatch, [json.dumps({'themes': [
+        {'name': 'Security', 'items': [1, 3]},
+        {'name': 'Transfers', 'items': [2]},
+        {'name': 'Bogus', 'items': [99]},
+    ]})])
+    assigned = labeler.assign_themes(['Azure tokens', 'REST transfer triggers',
+                                      'Certificate vault'])
+    assert assigned == ['Security', 'Transfers', 'Security']
+
+
+def test_assign_themes_returns_none_on_failure(monkeypatch):
+    labeler = GroupLabeler(provider='ollama')
+
+    def boom(*a, **k):
+        raise RuntimeError('down')
+    monkeypatch.setattr('slack_question_analyzer.group_labeler.requests.post', boom)
+    assert labeler.assign_themes(['a', 'b']) is None
+
+
+def test_analyzer_assigns_themes_to_groups_and_uniques(monkeypatch):
+    analyzer = make_analyzer(monkeypatch, label_groups=True)
+    stub_llm(monkeypatch, analyzer,
+             assign_themes=lambda items: ['Security', 'Security', 'Monitoring',
+                                          'Monitoring', 'Security'])
+    groups = [{'topic': 'Azure Tokens', 'count': 3, 'representative_question': 'x'},
+              {'topic': 'Cert Vault', 'count': 2, 'representative_question': 'y'}]
+    uniques = [{'text': 'IWHI monitoring examples?'},
+               {'text': 'Metering agent pre-installed?'},
+               {'text': 'Password reset?'}]
+
+    themes = analyzer._assign_themes(groups, uniques)
+    assert themes == [{'name': 'Security', 'count': 6},
+                      {'name': 'Monitoring', 'count': 2}]
+    assert groups[0]['theme'] == 'Security'
+    assert uniques[0]['theme'] == 'Monitoring'
+
+
+def test_themes_skipped_for_tiny_corpora(monkeypatch):
+    analyzer = make_analyzer(monkeypatch, label_groups=True)
+    stub_llm(monkeypatch, analyzer,
+             assign_themes=lambda items: ['A', 'B'])
+    assert analyzer._assign_themes(
+        [{'topic': 'T', 'count': 2, 'representative_question': 'x'}],
+        [{'text': 'q?'}]) is None

@@ -227,6 +227,20 @@ function DashboardView({ onUpload }) {
         </div>
       </Reveal>
 
+      {d.themes && d.themes.length ? (
+        <Reveal delay={100}>
+          <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: d.executiveSummary ? 16 : 32 }}>
+            <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--text-helper)', marginRight: 4 }}>Themes</span>
+            {d.themes.map((t, i) => (
+              <span key={i} title={`${t.count} question${t.count === 1 ? '' : 's'} fall under this theme`}
+                style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, color: 'var(--text-secondary)', background: 'var(--gray-10)', padding: '6px 12px' }}>
+                {t.name} <b style={{ color: 'var(--blue-70)' }}>{t.count}</b>
+              </span>
+            ))}
+          </div>
+        </Reveal>
+      ) : null}
+
       {setupBanner}
 
       {d.autoAdjusted ? (
@@ -272,7 +286,7 @@ function DashboardView({ onUpload }) {
         {groups.slice(0, visibleCount).map((g, i) => (
           <RankedRow key={g.rank} rank={g.rank} index={i} question={g.question} count={g.count}
             maxCount={max} keywords={g.keywords} similarity={g.similarity} questions={g.questions}
-            topic={g.topic} summary={g.summary} seenIn={g.seenIn} aiConfirmed={g.aiConfirmed}
+            topic={g.topic} summary={g.summary} seenIn={g.seenIn} aiConfirmed={g.aiConfirmed} theme={g.theme}
             onRenameTopic={g.topicId ? (name) => renameTopic(g.topicId, name) : null}
             defaultOpen={i === 0 && !query} />
         ))}
@@ -334,6 +348,7 @@ function transformAnalysisResults(results) {
     resolved: results.answered_questions || 0, // LLM answer detection (threads only)
     executiveSummary: results.executive_summary || null,
     ungrouped: results.ungrouped_questions || [],
+    themes: results.themes || null,
     groupingBar: (results.metadata && results.metadata.effective_threshold) || null,
     thresholdHint: thresholdHint(results),
     autoAdjusted: (results.metadata && results.metadata.threshold_auto_adjusted)
@@ -343,6 +358,7 @@ function transformAnalysisResults(results) {
       rank: i + 1,
       count: g.count,
       similarity: `${Math.round(g.avg_similarity * 100)}%`,
+      theme: g.theme || null,
       topic: g.topic || null,
       summary: g.summary || null,
       seenIn: g.seen_in_analyses || 0,

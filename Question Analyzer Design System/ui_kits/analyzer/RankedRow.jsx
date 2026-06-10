@@ -1,7 +1,8 @@
 // Animated, expandable ranked question row — shared by Dashboard & Week.
 function RankedRow({ rank, question, count, maxCount, keywords = [], movement = null,
   similarity = null, questions = null, index = 0, defaultOpen = false,
-  topic = null, summary = null, seenIn = 0, onRenameTopic = null, aiConfirmed = false }) {
+  topic = null, summary = null, seenIn = 0, onRenameTopic = null, aiConfirmed = false,
+  theme = null }) {
   const [open, setOpen] = React.useState(defaultOpen);
   const [hover, setHover] = React.useState(false);
   const [shown, setShown] = React.useState(false);
@@ -37,6 +38,7 @@ function RankedRow({ rank, question, count, maxCount, keywords = [], movement = 
         <span style={{ minWidth: 0 }}>
           {topic ? (
             <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.04em', textTransform: 'uppercase', color: heat, marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {theme ? <span title="Broad theme this topic falls under" style={{ color: 'var(--text-helper)', fontWeight: 500 }}>{theme} · </span> : null}
               {topic}
               {seenIn > 1 ? <span title={`This topic has come up in ${seenIn} analyses`} style={{ marginLeft: 8, fontWeight: 500, textTransform: 'none', letterSpacing: 0, color: 'var(--text-helper)', background: 'var(--gray-10)', padding: '1px 7px', fontFamily: 'var(--font-mono)', fontSize: 10.5 }}>recurring ×{seenIn}</span> : null}
               {onRenameTopic ? (
