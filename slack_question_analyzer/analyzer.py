@@ -278,6 +278,21 @@ class QuestionAnalyzer:
         if suspicious:
             logger.info("Double-checking %d message(s) the fast model skipped "
                         "but that look like questions...", len(suspicious))
+            # Field finding: the fast model sometimes attributes a question to
+            # the WRONG message in its batch, leaving the true source looking
+            # skipped — re-extracting it here then duplicated the question and
+            # created a phantom "asked 2x" group. Recoveries that match an
+            # already-extracted question are dropped.
+            seen = {q['normalized_text'] for q in questions}
+
+            def add_unless_duplicate(question):
+                if question['normalized_text'] in seen:
+                    logger.info("Skipping recovered duplicate: %.80r",
+                                question['text'])
+                    return
+                seen.add(question['normalized_text'])
+                questions.append(question)
+
             for start in range(0, len(suspicious), DETECT_BATCH_SIZE):
                 batch = suspicious[start:start + DETECT_BATCH_SIZE]
                 hits = self.labeler.extract_questions([t for t, _ in batch],
@@ -285,9 +300,10 @@ class QuestionAnalyzer:
                 recovered = {hit['index'] for hit in (hits or [])}
                 for hit in hits or []:
                     text, message = batch[hit['index']]
-                    questions.append(self._llm_question(hit['question'], text, message))
-                questions.extend(self.extractor.questions_from_messages(
-                    [m for i, (_, m) in enumerate(batch) if i not in recovered]))
+                    add_unless_duplicate(self._llm_question(hit['question'], text, message))
+                for q in self.extractor.questions_from_messages(
+                        [m for i, (_, m) in enumerate(batch) if i not in recovered]):
+                    add_unless_duplicate(q)
         return questions
 
     def _group_with_taxonomy(self, questions: List[Dict], taxonomy: Taxonomy,
