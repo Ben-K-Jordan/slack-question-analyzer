@@ -227,7 +227,10 @@ date,message
 When a generation model is available, the pipeline uses it for five optional passes.
 The default chat model is sized to your machine: `llama3.1:8b` (better topic names
 and verification) on machines with 12GB+ RAM, `llama3.2` (3B, ~2GB) on smaller ones.
-If only the small model is downloaded, the app quietly uses it. With Ollama:
+If only the small model is downloaded, the app quietly uses it. When both are
+downloaded, the big model handles the short judgment calls (verification, group
+audit, labels) and `llama3.2` does the token-heavy question extraction — big
+models judge, small models type. With Ollama:
 
 ```bash
 ollama pull llama3.1:8b   # or llama3.2 on machines with less RAM
