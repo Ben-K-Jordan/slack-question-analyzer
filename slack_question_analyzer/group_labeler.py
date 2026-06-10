@@ -19,6 +19,7 @@ import os
 import json
 import re
 import logging
+import threading
 from typing import Dict, List, Optional
 
 import requests
@@ -269,6 +270,12 @@ class GroupLabeler:
         else:  # openai
             self.model = os.getenv('CHAT_MODEL', 'gpt-4o-mini')
 
+        # Token-heavy work (extraction: hundreds of output tokens) runs on a
+        # fast model; short judgment calls (verify/audit/label: a few tokens)
+        # keep the quality model. On CPU an 8B model writes minutes per
+        # extraction batch — quality belongs in the judgments, not the typing.
+        self.fast_model = os.getenv('OLLAMA_FAST_MODEL') or self.model
+
         # Outputs are deterministic (temperature 0, fixed seed), so caching by
         # prompt makes re-analyzing the same transcript free
         cache_enabled = os.getenv('LLM_CACHE', 'on').lower() not in ('off', '0', 'false')
@@ -306,6 +313,13 @@ class GroupLabeler:
                 def downloaded(model):
                     return any(n == model or n.startswith(f"{model}:") for n in names)
                 if downloaded(self.model):
+                    if (not os.getenv('OLLAMA_FAST_MODEL')
+                            and self.model != FALLBACK_GENERATION_MODEL
+                            and downloaded(FALLBACK_GENERATION_MODEL)):
+                        self.fast_model = FALLBACK_GENERATION_MODEL
+                        logger.info("Model split: '%s' for question extraction "
+                                    "(token-heavy), '%s' for judgment calls",
+                                    self.fast_model, self.model)
                     return True
                 # Preferred model not downloaded: quietly drop to the small one
                 # rather than losing all LLM features (env-pinned models never switch)
@@ -314,6 +328,7 @@ class GroupLabeler:
                     logger.info("Chat model '%s' not downloaded; using '%s' instead",
                                 self.model, FALLBACK_GENERATION_MODEL)
                     self.model = FALLBACK_GENERATION_MODEL
+                    self.fast_model = FALLBACK_GENERATION_MODEL
                     self._cache = JsonDiskCache(
                         self.provider, self.model,
                         os.getenv('LLM_CACHE_DIR', '.llm_cache'),
@@ -329,34 +344,45 @@ class GroupLabeler:
 
     def warm_up(self) -> None:
         """
-        Load the Ollama model into memory before the first real call.
+        Load the Ollama model(s) into memory before the first real call.
 
         Model load alone can exceed a per-call timeout, making the first
         calls fail and the pipeline silently fall back to regex. An empty
-        chat request loads the model without generating anything.
+        chat request loads a model without generating anything. The fast
+        model (needed first, for extraction) loads synchronously; the
+        quality model loads in the background so it's resident by the
+        time verification needs it.
         """
         if self.provider != 'ollama' or not self.model:
             return
-        try:
-            logger.info("Loading chat model '%s' into memory...", self.model)
-            requests.post(f"{self.ollama_url}/api/chat",
-                          json={'model': self.model, 'messages': [],
-                                'keep_alive': self.KEEP_ALIVE},
-                          timeout=max(self.timeout, 600))
-        except requests.RequestException as e:
-            logger.warning("Chat model warm-up failed: %s", e)
+        self.available()  # resolves the fast/quality model split
+
+        def load(model):
+            try:
+                logger.info("Loading chat model '%s' into memory...", model)
+                requests.post(f"{self.ollama_url}/api/chat",
+                              json={'model': model, 'messages': [],
+                                    'keep_alive': self.KEEP_ALIVE},
+                              timeout=max(self.timeout, 600))
+            except requests.RequestException as e:
+                logger.warning("Chat model warm-up failed for '%s': %s", model, e)
+
+        load(self.fast_model)
+        if self.model != self.fast_model:
+            threading.Thread(target=load, args=(self.model,), daemon=True).start()
 
     # ------------------------------------------------------------------
     # Generation core
     # ------------------------------------------------------------------
 
-    def _chat(self, messages: List[Dict], schema: Dict, max_tokens: int = 300) -> str:
+    def _chat(self, messages: List[Dict], schema: Dict, max_tokens: int = 300,
+              model: Optional[str] = None) -> str:
         """One chat completion with schema-enforced JSON output."""
         if self.provider == 'ollama':
             response = requests.post(
                 f"{self.ollama_url}/api/chat",
                 json={
-                    'model': self.model,
+                    'model': model or self.model,
                     'messages': messages,
                     'stream': False,
                     'format': schema,  # Ollama enforces the JSON schema while decoding
@@ -402,13 +428,14 @@ class GroupLabeler:
 
     def _generate_json(self, system: str, user: str, schema: Dict,
                        validator=None, corrective: str = '',
-                       max_tokens: int = 300) -> Optional[Dict]:
+                       max_tokens: int = 300,
+                       model: Optional[str] = None) -> Optional[Dict]:
         """
         Chat once; if validation fails, retry once with corrective feedback
         appended to the conversation. Returns None when both attempts fail.
         Successful (validated) results are cached on disk by prompt.
         """
-        cache_key = f"{self.model}\n{system}\n{user}"
+        cache_key = f"{model or self.model}\n{system}\n{user}"
         cached = self._cache.get(cache_key)
         if cached is not None:
             return cached
@@ -416,7 +443,7 @@ class GroupLabeler:
         messages = [{'role': 'system', 'content': system},
                     {'role': 'user', 'content': user}]
         try:
-            raw = self._chat(messages, schema, max_tokens=max_tokens)
+            raw = self._chat(messages, schema, max_tokens=max_tokens, model=model)
             data = self._parse_json(raw)
             problem = ('Response was not valid JSON.' if data is None
                        else (validator(data) if validator else None))
@@ -428,7 +455,7 @@ class GroupLabeler:
             if corrective:
                 messages.append({'role': 'assistant', 'content': raw})
                 messages.append({'role': 'user', 'content': f"{corrective} ({problem})"})
-                raw = self._chat(messages, schema, max_tokens=max_tokens)
+                raw = self._chat(messages, schema, max_tokens=max_tokens, model=model)
                 data = self._parse_json(raw)
                 if data is not None and (validator is None or validator(data) is None):
                     self._cache.set(cache_key, data)
@@ -559,7 +586,7 @@ class GroupLabeler:
         user = (f"{EXTRACT_FEW_SHOT}\n{numbered}" if system.startswith(EXTRACT_SYSTEM[:40])
                 else f"Messages:\n{numbered}")
         data = self._generate_json(system, user, DETECT_SCHEMA,
-                                   max_tokens=800)
+                                   max_tokens=800, model=self.fast_model)
         if data is None or not isinstance(data.get('questions'), list):
             return None
 
