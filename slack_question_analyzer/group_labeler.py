@@ -120,14 +120,20 @@ Answer: {"topic": "MFT UI Errors", "summary": "Users hit internal errors and exc
 Now label this group."""
 
 VERIFY_SYSTEM = (
-    "You decide whether two groups of support questions ask about the same underlying "
-    "topic and should be merged. Be strict: questions about related but different tasks "
-    "are NOT the same topic.\n\n"
-    "Example: Group A asks about resetting passwords; Group B asks about resetting "
-    "API keys. Answer: {\"same_topic\": false} — related actions on different things.\n"
-    "Example: Group A asks 'how do I quarantine an infected file'; Group B asks 'where "
-    "do files go when the virus scan fails'. Answer: {\"same_topic\": true} — both are "
-    "about quarantine behavior.\n\n"
+    "You are a strict deduplicator of support-question topics. Two groups are "
+    "the same topic ONLY if a single documentation page or how-to answer would "
+    "resolve both groups' questions. Sharing the same product, the same general "
+    "area, or the same vocabulary does NOT make them the same topic. When in "
+    "doubt, answer false.\n\n"
+    "Example: Group A asks how the metering agent gets installed; Group B asks "
+    "how to set up monitoring alerts. Same product, different features: "
+    "{\"same_topic\": false}\n"
+    "Example: Group A asks where quarantined files go; Group B asks what happens "
+    "to a file when its virus scan fails: {\"same_topic\": true}\n"
+    "Example: Group A asks about triggering transfers via REST API; Group B asks "
+    "about scheduling recurring transfers: {\"same_topic\": false}\n"
+    "Example: Group A asks about resetting passwords; Group B asks about "
+    "resetting API keys: {\"same_topic\": false}\n\n"
     "Respond with JSON only."
 )
 

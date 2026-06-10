@@ -145,12 +145,14 @@ Higher threshold = stricter grouping (0.0 to 1.0):
 slack-analyzer analyze example_input.txt --threshold 0.9
 ```
 
-**By default the threshold is automatic**: it starts at a model-aware value (0.80 for
-Ollama, 0.85 otherwise — field-calibrated: in a single-domain channel, unrelated
-questions score ~0.65-0.72 with local models, so the bar must sit above that noise
-band). If nothing groups AND your most similar pair clearly stands out from the bulk,
-the threshold relaxes to just below it and says so; if everything sits inside the
-noise band, it honestly reports singletons instead of merging unrelated topics. Setting `--threshold`, the Settings slider, or `SIMILARITY_THRESHOLD` pins an exact
+**By default the grouping bar is adaptive**: it starts at 0.85 and is raised
+automatically above your corpus's measured noise level (the bulk of pairwise
+similarities, p90 + `NOISE_GATE_MARGIN`). This matters because in a single-domain
+channel, embedding models score even UNRELATED questions very high — any fixed
+threshold eventually sits inside that noise band and merges different topics. The
+console logs the effective bar per run. If nothing groups and your most similar pair
+clearly stands out from the bulk, the bar relaxes to just below it (never into the
+noise); otherwise the analyzer honestly reports singletons instead of a blob. Setting `--threshold`, the Settings slider, or `SIMILARITY_THRESHOLD` pins an exact
 value and disables auto-adjustment. Results always include pairwise similarity stats
 (`metadata.similarity_stats`) for informed tuning.
 
