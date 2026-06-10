@@ -72,6 +72,20 @@ def test_clean_slack_markup():
     assert clean("<!channel> anyone seen <https://status.example.com>?") == "anyone seen ?"
 
 
+def test_thread_replies_attached_to_parent_question():
+    content = json.dumps([
+        {"text": "How do I reset my password?", "ts": "1704412800.0"},
+        {"text": "Go to settings > security > reset.", "ts": "1704412900.0",
+         "thread_ts": "1704412800.0"},
+        {"text": "thanks, worked! :tada:", "ts": "1704413000.0",
+         "thread_ts": "1704412800.0"},
+    ])
+    questions = QuestionExtractor().parse_slack_content(content)
+    assert len(questions) == 1  # replies are not standalone messages
+    assert questions[0]['replies'] == ['Go to settings > security > reset.',
+                                       'thanks, worked!']
+
+
 def test_markup_in_json_messages_is_cleaned():
     content = json.dumps([
         {"text": "<@U123> how do I configure <http://ex.com|the webhook>?", "ts": "1704412800"},

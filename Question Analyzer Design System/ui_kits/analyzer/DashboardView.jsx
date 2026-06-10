@@ -54,7 +54,7 @@ function DashboardView() {
       </Reveal>
 
       <Reveal delay={90}>
-        <div style={{ display: 'flex', gap: 56, padding: '22px 24px', background: 'var(--gray-10)', borderLeft: '3px solid var(--blue-60)', marginBottom: 32 }}>
+        <div style={{ display: 'flex', gap: 56, padding: '22px 24px', background: 'var(--gray-10)', borderLeft: '3px solid var(--blue-60)', marginBottom: d.executiveSummary ? 16 : 32 }}>
           {stat('Questions logged', d.totalQuestions)}
           {stat('Distinct topics', d.totalGroups, 'var(--purple-60)')}
           {stat('Answered', d.resolved, 'var(--teal-60)')}
@@ -64,6 +64,15 @@ function DashboardView() {
           </div>
         </div>
       </Reveal>
+
+      {d.executiveSummary ? (
+        <Reveal delay={120}>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: '16px 24px', background: '#fff', border: '1px solid var(--border-subtle)', borderLeft: '3px solid var(--purple-60)', marginBottom: 32 }}>
+            <span style={{ color: 'var(--purple-60)', flex: '0 0 auto', marginTop: 1 }}><Icon name="sparkles" size={16} /></span>
+            <span style={{ fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.55 }}>{d.executiveSummary}</span>
+          </div>
+        </Reveal>
+      ) : null}
 
       <Reveal delay={160}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
@@ -93,7 +102,8 @@ function transformAnalysisResults(results) {
   return {
     totalQuestions: results.total_questions || 0,
     totalGroups: results.total_groups || 0,
-    resolved: 0, // Not tracked yet
+    resolved: results.answered_questions || 0, // LLM answer detection (threads only)
+    executiveSummary: results.executive_summary || null,
     topTopic: results.groups[0] ? (results.groups[0].topic || fallbackTopic(results.groups[0])) : 'N/A',
     groups: results.groups.map((g, i) => ({
       rank: i + 1,

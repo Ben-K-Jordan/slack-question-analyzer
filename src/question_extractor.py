@@ -118,17 +118,26 @@ class QuestionExtractor:
         Returns:
             List of dictionaries containing questions and metadata
         """
+        return self.questions_from_messages(self.extract_messages(content))
+
+    def extract_messages(self, content: str) -> List[Dict]:
+        """
+        Split raw content into individual messages, detecting the format.
+
+        Returns a list of {'text', 'date', 'replies'} dicts (replies only
+        present for Slack JSON exports with threads).
+        """
         stripped = content.lstrip()
         if stripped.startswith('{') or stripped.startswith('['):
             messages = self._messages_from_json(stripped)
             if messages is not None:
-                return self._questions_from_messages(messages)
+                return messages
 
         messages = self._messages_from_csv(content)
         if messages is not None:
-            return self._questions_from_messages(messages)
+            return messages
 
-        return self._parse_text_format(content)
+        return self._messages_from_text(content)
 
     # ---- Slack markup ----
 
@@ -164,7 +173,13 @@ class QuestionExtractor:
             return None
 
     def _messages_from_json(self, content: str) -> Optional[List[Dict]]:
-        """Parse a Slack JSON export. Returns None when it isn't one."""
+        """
+        Parse a Slack JSON export. Returns None when it isn't one.
+
+        Thread replies (messages whose thread_ts points at another message)
+        are attached to their parent as 'replies' instead of being treated
+        as standalone messages, enabling answer detection.
+        """
         try:
             data = json.loads(content)
         except json.JSONDecodeError:
@@ -175,15 +190,29 @@ class QuestionExtractor:
         if not isinstance(data, list):
             return None
 
+        items = [item for item in data
+                 if isinstance(item, dict) and isinstance(item.get('text'), str) and item['text']]
+
+        # Split into thread parents and replies
+        replies_by_parent: Dict[str, List[str]] = {}
+        parents = []
+        for item in items:
+            ts = item.get('ts')
+            thread_ts = item.get('thread_ts')
+            if thread_ts and ts and thread_ts != ts:
+                replies_by_parent.setdefault(thread_ts, []).append(
+                    self.clean_slack_markup(item['text'])[:300])
+            else:
+                parents.append(item)
+
         messages = []
-        for item in data:
-            if not isinstance(item, dict):
-                continue
-            text = item.get('text')
-            if not text or not isinstance(text, str):
-                continue
+        for item in parents:
             date = item.get('date') or self._slack_ts_to_date(item.get('ts'))
-            messages.append({'text': text, 'date': date})
+            message = {'text': item['text'], 'date': date}
+            replies = replies_by_parent.get(item.get('ts'), [])
+            if replies:
+                message['replies'] = replies[:5]
+            messages.append(message)
         return messages
 
     _CSV_TEXT_COLUMNS = ('text', 'message', 'question', 'content', 'body')
@@ -221,34 +250,37 @@ class QuestionExtractor:
             return None
         return messages
 
-    def _questions_from_messages(self, messages: List[Dict]) -> List[Dict]:
-        """Extract questions from structured {'text', 'date'} messages."""
+    def questions_from_messages(self, messages: List[Dict]) -> List[Dict]:
+        """Extract questions from structured {'text', 'date', 'replies'} messages."""
         parsed_questions = []
         for message in messages:
             text = self.clean_slack_markup(message['text'].replace('\n', ' '))
             for question in self.extract_questions(text):
-                parsed_questions.append({
+                parsed = {
                     'text': question,
                     'normalized_text': self.normalize_question(question),
                     'date': message.get('date') or 'Unknown',
                     'original_message': text[:200]
-                })
+                }
+                if message.get('replies'):
+                    parsed['replies'] = message['replies']
+                parsed_questions.append(parsed)
         return parsed_questions
 
-    def _parse_text_format(self, content: str) -> List[Dict]:
+    def _messages_from_text(self, content: str) -> List[Dict]:
         """Parse plain text with dashed separator lines between messages."""
         # Split by separator line (a run of 10+ dashes on its own line)
-        messages = re.split(r'\n-{10,}\n?|^-{10,}\n', content)
+        blocks = re.split(r'\n-{10,}\n?|^-{10,}\n', content)
 
-        parsed_questions = []
+        messages = []
 
-        for message in messages:
-            message = message.strip()
-            if not message:
+        for block in blocks:
+            block = block.strip()
+            if not block:
                 continue
 
             # Extract date (first line typically)
-            lines = message.split('\n')
+            lines = block.split('\n')
             date = None
             text_lines = []
 
@@ -267,21 +299,10 @@ class QuestionExtractor:
                             continue
                 text_lines.append(line)
 
-            # Join remaining text, stripping any pasted Slack markup
-            text = self.clean_slack_markup(' '.join(text_lines))
+            if text_lines:
+                messages.append({'text': ' '.join(text_lines), 'date': date})
 
-            # Extract questions from this message
-            questions = self.extract_questions(text)
-
-            for question in questions:
-                parsed_questions.append({
-                    'text': question,
-                    'normalized_text': self.normalize_question(question),
-                    'date': date or 'Unknown',
-                    'original_message': text[:200]  # Keep first 200 chars for context
-                })
-
-        return parsed_questions
+        return messages
 
     _DATE_PATTERNS = [
         r'\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b',  # YYYY-MM-DD

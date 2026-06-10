@@ -154,28 +154,43 @@ date,message
 2024-01-05,How do I reset my password?
 ```
 
-## LLM Topic Labels
+## LLM Features
 
-When a generation model is available, each question group gets a short topic name and a
-one-sentence summary (shown in the dashboard and Markdown reports). With Ollama:
+When a generation model is available, the pipeline uses it for five optional passes.
+With Ollama:
 
 ```bash
 ollama pull llama3.2
 ```
 
-Configuration in `.env`:
+| Feature | What it does | Switch (in `.env`) |
+|---|---|---|
+| Topic labels | Names each group (2-4 words) and writes a one-sentence summary | `GROUP_LABELS` |
+| Group verification | Double-checks group pairs whose similarity falls just below the threshold and merges them when they're the same topic | `LLM_VERIFY_GROUPS` |
+| Question detection | Finds implicit help requests the regex extractor missed ("stuck all day, the webhook keeps timing out") and rewrites them as questions | `LLM_EXTRACTION` |
+| Answer detection | Reads thread replies (Slack JSON exports) and decides whether each question was actually answered — feeds the "Answered" metric | `LLM_ANSWER_DETECTION` |
+| Executive summary | 2-3 sentence overview of the dominant themes, shown on the dashboard and in Markdown reports | `EXECUTIVE_SUMMARY` |
+
+Each switch accepts `auto` (default: run when the model is available), `on`, or `off`.
+`GROUP_LABELS=off` (or `--no-labels` on the CLI) disables all LLM features at once.
 
 ```env
-# 'auto' (default): label when a generation model is available; 'on' / 'off' to force
-GROUP_LABELS=auto
-# Ollama chat model used for labeling (default: llama3.2)
+# Ollama chat model used for all LLM features (default: llama3.2)
 OLLAMA_GENERATION_MODEL=llama3.2
 # For openai provider: CHAT_MODEL (default gpt-4o-mini)
-# For azure provider: AZURE_OPENAI_CHAT_DEPLOYMENT (labeling is off unless set)
+# For azure provider: AZURE_OPENAI_CHAT_DEPLOYMENT (LLM features off unless set)
+
+# Borderline verification window and call cap
+LLM_VERIFY_MARGIN=0.03
+LLM_VERIFY_MAX=10
 ```
 
-Without a generation model, groups fall back to keyword-based topic names — the
-analysis itself never depends on the LLM. Use `--no-labels` on the CLI to skip labeling.
+Prompting details: all calls use chat endpoints with JSON-schema-enforced output,
+temperature 0, a fixed seed, and `keep_alive` so Ollama keeps the model loaded across
+calls. Labeling prompts include few-shot examples, the group's keywords, and a diverse
+sample of phrasings; outputs are validated (generic topics like "General Questions" are
+rejected) with one corrective retry. Everything degrades gracefully — without a
+generation model, groups fall back to keyword-based topics and the analysis still works.
 
 ## Output Format
 

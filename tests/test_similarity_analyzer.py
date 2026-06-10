@@ -145,6 +145,62 @@ def test_lexical_near_duplicates_merge_without_ai(monkeypatch):
     assert groups[0]['count'] == 2
 
 
+def test_borderline_groups_merged_when_verifier_agrees(monkeypatch):
+    """Pairs just below the threshold are merged when the LLM says same topic."""
+    analyzer = make_analyzer(monkeypatch, threshold='0.85')
+    monkeypatch.setenv('LLM_VERIFY_MARGIN', '0.05')
+
+    # Two questions with similarity ~0.83: below 0.85 but inside the margin
+    fake = np.array([[1.0, 0.0], [0.83, np.sqrt(1 - 0.83 ** 2)]])
+    monkeypatch.setattr(analyzer, 'get_embeddings_batch',
+                        lambda texts, progress_callback=None: fake)
+
+    questions = [question('How do I reset my password?'),
+                 question('Steps for changing my password?')]
+
+    asked = []
+
+    def verifier(a, b):
+        asked.append((a, b))
+        return True
+
+    groups = analyzer.group_similar_questions(questions, verifier=verifier)
+    assert len(asked) == 1
+    assert len(groups) == 1
+    assert groups[0]['count'] == 2
+
+
+def test_borderline_groups_stay_apart_when_verifier_disagrees(monkeypatch):
+    analyzer = make_analyzer(monkeypatch, threshold='0.85')
+    monkeypatch.setenv('LLM_VERIFY_MARGIN', '0.05')
+
+    fake = np.array([[1.0, 0.0], [0.83, np.sqrt(1 - 0.83 ** 2)]])
+    monkeypatch.setattr(analyzer, 'get_embeddings_batch',
+                        lambda texts, progress_callback=None: fake)
+
+    questions = [question('How do I reset my password?'),
+                 question('How do I reset my API key?')]
+    groups = analyzer.group_similar_questions(questions, verifier=lambda a, b: False)
+    assert len(groups) == 2
+
+
+def test_clearly_different_groups_skip_the_verifier(monkeypatch):
+    """The verifier is only consulted inside the borderline band."""
+    analyzer = make_analyzer(monkeypatch, threshold='0.85')
+
+    fake = np.array([[1.0, 0.0], [0.0, 1.0]])  # similarity ~0: far below band
+    monkeypatch.setattr(analyzer, 'get_embeddings_batch',
+                        lambda texts, progress_callback=None: fake)
+
+    def never(a, b):
+        raise AssertionError('verifier should not be called')
+
+    questions = [question('How do I reset my password?'),
+                 question('What is the deploy schedule?')]
+    groups = analyzer.group_similar_questions(questions, verifier=never)
+    assert len(groups) == 2
+
+
 def test_embedding_cache_roundtrip(tmp_path):
     cache = EmbeddingCache('ollama', 'test-model', cache_dir=str(tmp_path))
     assert cache.get('hello') is None

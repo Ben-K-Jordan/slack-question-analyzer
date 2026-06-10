@@ -158,6 +158,9 @@ def compute_weekly_stats(results: Dict) -> Optional[Dict]:
     else:
         delta_pct = 100 if total_this_week > 0 else 0
 
+    answered_this_week = sum(
+        1 for row in this_week_rows for q in row['this_week'] if q.get('answered'))
+
     return {
         'weekLabel': _week_label(anchor - timedelta(days=6), anchor),
         'totalThisWeek': total_this_week,
@@ -165,7 +168,7 @@ def compute_weekly_stats(results: Dict) -> Optional[Dict]:
         'deltaPct': delta_pct,
         'newQuestionTypes': sum(1 for g in groups if g['movement'] == 'new'),
         'groupsThisWeek': len(groups),
-        'answered': 0,  # not tracked yet
+        'answered': answered_this_week,  # via LLM answer detection (threads only)
         'trend': trend,
         'trendLabels': trend_labels,
         'groups': groups,

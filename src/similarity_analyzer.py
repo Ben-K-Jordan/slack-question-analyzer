@@ -393,17 +393,20 @@ class SimilarityAnalyzer:
         return [buckets[key] for key in canonical]
 
     def group_similar_questions(self, questions: List[Dict],
-                                progress_callback=None) -> List[Dict]:
+                                progress_callback=None, verifier=None) -> List[Dict]:
         """
         Group similar questions together.
 
         Exact and near-duplicate questions are merged with cheap string
         comparison first, so the AI provider is only called for genuinely
-        distinct questions.
+        distinct questions. When a verifier is given, group pairs whose
+        similarity falls just below the threshold are double-checked by it.
 
         Args:
             questions: List of question dictionaries with 'text' and 'normalized_text'
             progress_callback: Optional fn(completed, total) for embedding progress
+            verifier: Optional fn(texts_a, texts_b) -> Optional[bool] used to
+                      decide borderline merges (e.g. an LLM yes/no check)
 
         Returns:
             List of question groups with representative questions
@@ -438,63 +441,123 @@ class SimilarityAnalyzer:
         # Calculate similarity matrix between distinct questions
         similarity_matrix = cosine_similarity(embeddings)
 
-        # Group buckets using clustering approach
-        groups = []
-        assigned = set()
+        clusters = self._cluster_buckets(len(buckets), similarity_matrix)
 
-        for i in range(len(buckets)):
-            if i in assigned:
-                continue
+        # Tier 4: LLM double-check for merges embeddings couldn't decide
+        if verifier is not None and len(clusters) > 1:
+            clusters = self._merge_borderline_clusters(clusters, similarity_matrix,
+                                                       buckets, verifier)
 
-            # Start a new group with this bucket
-            group_indices = [i]
-            assigned.add(i)
-
-            # Find similar buckets
-            for j in range(i + 1, len(buckets)):
-                if j in assigned:
-                    continue
-
-                # Check similarity with all buckets in current group
-                max_similarity = max(similarity_matrix[j][idx] for idx in group_indices)
-
-                if max_similarity >= self.similarity_threshold:
-                    group_indices.append(j)
-                    assigned.add(j)
-
-            # Expand buckets back into their member questions
-            group_questions = [q for idx in group_indices for q in buckets[idx]]
-
-            # Find the most representative bucket (closest to centroid),
-            # weighted implicitly by being compared against all members
-            if len(group_indices) > 1:
-                group_embeddings = embeddings[group_indices]
-                centroid = np.mean(group_embeddings, axis=0)
-
-                distances = [np.linalg.norm(emb - centroid) for emb in group_embeddings]
-                representative_idx = group_indices[int(np.argmin(distances))]
-                representative = buckets[representative_idx][0]['text']
-            else:
-                representative = buckets[group_indices[0]][0]['text']
-
-            # Average pairwise similarity between the distinct questions
-            if len(group_indices) > 1:
-                similarities = []
-                for a in range(len(group_indices)):
-                    for b in range(a + 1, len(group_indices)):
-                        similarities.append(similarity_matrix[group_indices[a]][group_indices[b]])
-                avg_sim = float(np.mean(similarities)) if similarities else 1.0
-            else:
-                avg_sim = 1.0
-
-            groups.append({
-                'representative_question': representative,
-                'questions': group_questions,
-                'count': len(group_questions),
-                'avg_similarity': avg_sim
-            })
+        groups = [self._build_group(indices, buckets, embeddings, similarity_matrix)
+                  for indices in clusters]
 
         # Sort groups by count (most common first)
         groups.sort(key=lambda x: x['count'], reverse=True)
 
         return groups
+
+    def _cluster_buckets(self, n: int, similarity_matrix) -> List[List[int]]:
+        """Greedy clustering of bucket indices by the similarity threshold."""
+        clusters = []
+        assigned = set()
+
+        for i in range(n):
+            if i in assigned:
+                continue
+
+            group_indices = [i]
+            assigned.add(i)
+
+            for j in range(i + 1, n):
+                if j in assigned:
+                    continue
+
+                max_similarity = max(similarity_matrix[j][idx] for idx in group_indices)
+                if max_similarity >= self.similarity_threshold:
+                    group_indices.append(j)
+                    assigned.add(j)
+
+            clusters.append(group_indices)
+
+        return clusters
+
+    def _merge_borderline_clusters(self, clusters: List[List[int]], similarity_matrix,
+                                   buckets: List[List[Dict]], verifier) -> List[List[int]]:
+        """
+        Ask the verifier about cluster pairs whose best cross-similarity falls
+        just below the threshold — the zone where embeddings are unreliable.
+        """
+        margin = float(os.getenv('LLM_VERIFY_MARGIN', '0.03'))
+        max_checks = int(os.getenv('LLM_VERIFY_MAX', '10'))
+
+        candidates = []
+        for a in range(len(clusters)):
+            for b in range(a + 1, len(clusters)):
+                best = max(similarity_matrix[i][j]
+                           for i in clusters[a] for j in clusters[b])
+                if self.similarity_threshold - margin <= best < self.similarity_threshold:
+                    candidates.append((best, a, b))
+        candidates.sort(reverse=True)
+        candidates = candidates[:max_checks]
+
+        if not candidates:
+            return clusters
+
+        print(f"Verifying {len(candidates)} borderline group pair(s) with the LLM...")
+        parent = list(range(len(clusters)))
+
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        merged_count = 0
+        for _, a, b in candidates:
+            ra, rb = find(a), find(b)
+            if ra == rb:
+                continue
+            texts_a = [buckets[idx][0]['text'] for idx in clusters[ra][:3]]
+            texts_b = [buckets[idx][0]['text'] for idx in clusters[rb][:3]]
+            if verifier(texts_a, texts_b) is True:
+                parent[rb] = ra
+                clusters[ra] = clusters[ra] + clusters[rb]
+                merged_count += 1
+
+        if merged_count:
+            print(f"LLM verification merged {merged_count} borderline group pair(s)")
+        return [clusters[i] for i in range(len(clusters)) if find(i) == i]
+
+    def _build_group(self, group_indices: List[int], buckets: List[List[Dict]],
+                     embeddings, similarity_matrix) -> Dict:
+        """Construct the result dict for one cluster of buckets."""
+        # Expand buckets back into their member questions
+        group_questions = [q for idx in group_indices for q in buckets[idx]]
+
+        # Find the most representative bucket (closest to centroid)
+        if len(group_indices) > 1:
+            group_embeddings = embeddings[group_indices]
+            centroid = np.mean(group_embeddings, axis=0)
+
+            distances = [np.linalg.norm(emb - centroid) for emb in group_embeddings]
+            representative_idx = group_indices[int(np.argmin(distances))]
+            representative = buckets[representative_idx][0]['text']
+        else:
+            representative = buckets[group_indices[0]][0]['text']
+
+        # Average pairwise similarity between the distinct questions
+        if len(group_indices) > 1:
+            similarities = []
+            for a in range(len(group_indices)):
+                for b in range(a + 1, len(group_indices)):
+                    similarities.append(similarity_matrix[group_indices[a]][group_indices[b]])
+            avg_sim = float(np.mean(similarities)) if similarities else 1.0
+        else:
+            avg_sim = 1.0
+
+        return {
+            'representative_question': representative,
+            'questions': group_questions,
+            'count': len(group_questions),
+            'avg_similarity': avg_sim
+        }
