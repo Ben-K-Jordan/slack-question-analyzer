@@ -6,6 +6,7 @@ dist/
 __pycache__/
 *.pyc
 .embedding_cache/
+.llm_cache/
 .pytest_cache/
 analyses/
 jobs/

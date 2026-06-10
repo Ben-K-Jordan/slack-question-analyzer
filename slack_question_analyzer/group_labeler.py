@@ -24,6 +24,8 @@ from typing import Dict, List, Optional
 import requests
 from dotenv import load_dotenv
 
+from .disk_cache import JsonDiskCache
+
 logger = logging.getLogger(__name__)
 
 MAX_QUESTIONS_IN_PROMPT = 8
@@ -156,6 +158,13 @@ class GroupLabeler:
         else:  # openai
             self.model = os.getenv('CHAT_MODEL', 'gpt-4o-mini')
 
+        # Outputs are deterministic (temperature 0, fixed seed), so caching by
+        # prompt makes re-analyzing the same transcript free
+        cache_enabled = os.getenv('LLM_CACHE', 'on').lower() not in ('off', '0', 'false')
+        self._cache = JsonDiskCache(provider, self.model or 'none',
+                                    os.getenv('LLM_CACHE_DIR', '.llm_cache'),
+                                    enabled=cache_enabled)
+
     # ------------------------------------------------------------------
     # Availability
     # ------------------------------------------------------------------
@@ -239,7 +248,13 @@ class GroupLabeler:
         """
         Chat once; if validation fails, retry once with corrective feedback
         appended to the conversation. Returns None when both attempts fail.
+        Successful (validated) results are cached on disk by prompt.
         """
+        cache_key = f"{self.model}\n{system}\n{user}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         messages = [{'role': 'system', 'content': system},
                     {'role': 'user', 'content': user}]
         try:
@@ -248,6 +263,8 @@ class GroupLabeler:
             problem = ('Response was not valid JSON.' if data is None
                        else (validator(data) if validator else None))
             if problem is None:
+                self._cache.set(cache_key, data)
+                self._cache.save()
                 return data
 
             if corrective:
@@ -256,6 +273,8 @@ class GroupLabeler:
                 raw = self._chat(messages, schema, max_tokens=max_tokens)
                 data = self._parse_json(raw)
                 if data is not None and (validator is None or validator(data) is None):
+                    self._cache.set(cache_key, data)
+                    self._cache.save()
                     return data
             return None
         except Exception as e:
