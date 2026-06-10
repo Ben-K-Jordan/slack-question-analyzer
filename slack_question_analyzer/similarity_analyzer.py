@@ -66,12 +66,22 @@ class SimilarityAnalyzer:
             )
 
         self.provider = provider
+        # 'Pinned' means the user chose a threshold (param or env). Unpinned
+        # thresholds start at a model-aware default and may auto-adjust when
+        # nothing groups — similarity scales differ between embedding models.
         if threshold is not None:
             if not 0.0 <= threshold <= 1.0:
                 raise ValueError(f"threshold must be between 0 and 1, got {threshold}")
             self.similarity_threshold = float(threshold)
-        else:
+            self.threshold_pinned = True
+        elif os.getenv('SIMILARITY_THRESHOLD'):
             self.similarity_threshold = self._read_threshold()
+            self.threshold_pinned = True
+        else:
+            # Local models (nomic etc.) score paraphrases lower than ada-002
+            self.similarity_threshold = 0.75 if provider == 'ollama' else 0.85
+            self.threshold_pinned = False
+        self.threshold_auto_adjusted = False
 
         if provider == 'azure':
             # Azure OpenAI configuration
@@ -352,6 +362,7 @@ class SimilarityAnalyzer:
 
         logger.info("Analyzing %d questions...", len(questions))
         self.last_similarity_stats = None
+        self.threshold_auto_adjusted = False
 
         # Tiers 1-2: merge duplicates without AI
         buckets = self._dedupe_questions(questions)
@@ -390,6 +401,22 @@ class SimilarityAnalyzer:
             self.last_similarity_stats = self._similarity_stats(similarity_matrix)
 
             clusters = self._cluster_buckets(len(buckets), similarity_matrix)
+
+            # Auto-adjust: when the user didn't pin a threshold and nothing
+            # merged, re-cluster just below the most similar pair (cheap — the
+            # matrix is already computed) instead of returning all singletons
+            stats = self.last_similarity_stats
+            if (not self.threshold_pinned
+                    and all(len(c) == 1 for c in clusters)
+                    and stats and stats['max'] < self.similarity_threshold):
+                adjusted = round(stats['max'] - 0.02, 2)
+                if adjusted >= 0.35:  # below this, "most similar" is just noise
+                    logger.info("No groups at threshold %.2f; auto-adjusting to "
+                                "%.2f (most similar pair: %.3f)",
+                                self.similarity_threshold, adjusted, stats['max'])
+                    self.similarity_threshold = adjusted
+                    self.threshold_auto_adjusted = True
+                    clusters = self._cluster_buckets(len(buckets), similarity_matrix)
 
             # Tier 4: LLM double-check for merges embeddings couldn't decide
             if verifier is not None and len(clusters) > 1:

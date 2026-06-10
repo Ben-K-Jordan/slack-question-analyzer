@@ -111,11 +111,12 @@ Higher threshold = stricter grouping (0.0 to 1.0):
 slack-analyzer analyze example_input.txt --threshold 0.9
 ```
 
-**Similarity scales vary a lot between embedding models** — 0.85 suits OpenAI's
-ada-002, but local models like `nomic-embed-text` score paraphrases lower (often
-0.6–0.8), so start around `--threshold 0.7` with Ollama. When nothing groups, the
-results include pairwise similarity stats (`metadata.similarity_stats`) and both the
-dashboard and CLI summary suggest a threshold just below your most similar pair.
+**By default the threshold is automatic**: it starts at a model-aware value (0.75 for
+Ollama — local models score paraphrases lower than OpenAI's ada-002 — 0.85 otherwise),
+and if nothing groups, it relaxes itself to just below your most similar pair and says
+so. Setting `--threshold`, the Settings slider, or `SIMILARITY_THRESHOLD` pins an exact
+value and disables auto-adjustment. Results always include pairwise similarity stats
+(`metadata.similarity_stats`) for informed tuning.
 
 ### Choose an Output Format
 
@@ -196,7 +197,7 @@ ollama pull llama3.2
 |---|---|---|
 | Topic labels | Names each group (2-4 words) and writes a one-sentence summary | `GROUP_LABELS` |
 | Group verification | Double-checks group pairs whose similarity falls just below the threshold and merges them when they're the same topic | `LLM_VERIFY_GROUPS` |
-| Question detection | Finds implicit help requests the regex extractor missed ("stuck all day, the webhook keeps timing out") and rewrites them as questions. Set `LLM_EXTRACTION=full` to have the LLM extract and clean **every** question instead (best quality, slower first run; falls back to regex if a call fails) | `LLM_EXTRACTION` |
+| Question extraction | By default (`auto`), the LLM extracts and cleanly rewrites **every** question for transcripts up to 150 messages (best quality; regex fallback per batch); larger transcripts use regex plus an LLM pass for implicit help requests. `full` forces LLM-first at any size, `on` is regex-first only | `LLM_EXTRACTION` |
 | Answer detection | Reads thread replies (Slack JSON exports) and decides whether each question was actually answered — feeds the "Answered" metric | `LLM_ANSWER_DETECTION` |
 | Executive summary | 2-3 sentence overview of the dominant themes, shown on the dashboard and in Markdown reports | `EXECUTIVE_SUMMARY` |
 

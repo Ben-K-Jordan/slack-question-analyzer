@@ -16,6 +16,18 @@ function DashboardView() {
   }, []);
 
   const PAGE_SIZE = 50;
+  // First-run onboarding: surface backend/model setup problems before the
+  // user wastes an upload finding out
+  const [backendSetup, setBackendSetup] = React.useState(null);
+  React.useEffect(() => {
+    if (!window.QA_API) return;
+    let cancelled = false;
+    window.QA_API.health(window.QA_SETTINGS && window.QA_SETTINGS.get().provider)
+      .then((h) => { if (!cancelled && h.status !== 'ok') setBackendSetup(h.message || 'The analysis backend is not ready.'); })
+      .catch(() => { if (!cancelled) setBackendSetup('Cannot reach the analyzer backend. Start it with: python api_server.py'); });
+    return () => { cancelled = true; };
+  }, []);
+
   const isDemo = !analysisResults;
   const d = analysisResults ? transformAnalysisResults(analysisResults) : window.DASHBOARD_DATA;
   const [query, setQuery] = React.useState('');
@@ -94,6 +106,28 @@ function DashboardView() {
           </div>
         </div>
       </Reveal>
+
+      {backendSetup ? (
+        <Reveal delay={100}>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: '16px 24px', background: '#fff', border: '1px solid var(--border-subtle)', borderLeft: '3px solid var(--red-60)', marginBottom: 32 }}>
+            <span style={{ color: 'var(--red-60)', flex: '0 0 auto', marginTop: 1 }}><Icon name="alert-triangle" size={16} /></span>
+            <span style={{ fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+              <b>Setup needed before analyzing:</b> {backendSetup}
+            </span>
+          </div>
+        </Reveal>
+      ) : null}
+
+      {d.autoAdjusted ? (
+        <Reveal delay={105}>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: '14px 24px', background: '#fff', border: '1px solid var(--border-subtle)', borderLeft: '3px solid var(--teal-60)', marginBottom: 32 }}>
+            <span style={{ color: 'var(--teal-60)', flex: '0 0 auto', marginTop: 1 }}><Icon name="sliders-horizontal" size={16} /></span>
+            <span style={{ fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+              Nothing grouped at the default threshold, so it was automatically relaxed to <b>{Math.round(d.autoAdjusted * 100)}%</b> for this analysis. Pin a value in Settings if you prefer.
+            </span>
+          </div>
+        </Reveal>
+      ) : null}
 
       {d.thresholdHint ? (
         <Reveal delay={110}>
@@ -188,6 +222,8 @@ function transformAnalysisResults(results) {
     executiveSummary: results.executive_summary || null,
     ungrouped: results.ungrouped_questions || [],
     thresholdHint: thresholdHint(results),
+    autoAdjusted: (results.metadata && results.metadata.threshold_auto_adjusted)
+      ? results.metadata.similarity_threshold : null,
     topTopic: results.groups[0] ? (results.groups[0].topic || fallbackTopic(results.groups[0])) : 'N/A',
     groups: results.groups.map((g, i) => ({
       rank: i + 1,
