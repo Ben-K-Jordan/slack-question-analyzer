@@ -621,3 +621,31 @@ def test_themes_skipped_for_tiny_corpora(monkeypatch):
     assert analyzer._assign_themes(
         [{'topic': 'T', 'count': 2, 'representative_question': 'x'}],
         [{'text': 'q?'}]) is None
+
+
+def test_safety_net_drops_duplicate_when_fast_model_misattributes(monkeypatch):
+    """Field regression: the fast model extracted the question but credited
+    the WRONG message, so the true source looked skipped, got re-extracted,
+    and the duplicate became a phantom 'asked 2x' group."""
+    monkeypatch.setenv('LLM_EXTRACTION', 'full')
+    vectors = {'how do i configure iwhi monitoring?': [1.0, 0.0]}
+    analyzer = make_analyzer(monkeypatch, vectors=vectors, label_groups=True)
+
+    def extract(texts, thorough=False):
+        # Both passes return the same question; the fast pass credits the
+        # wrong message (index 1, the statement)
+        return [{'index': 1 if not thorough else 0,
+                 'question': 'How do I configure IWHI monitoring?'}]
+
+    stub_llm(monkeypatch, analyzer,
+             label_group=lambda texts, keywords=None: None,
+             verify_same_topic=lambda a, b: None,
+             extract_questions=extract,
+             summarize_analysis=lambda groups, total: None)
+
+    results = analyzer.analyze_slack_content(
+        "2024-01-05\nHow do I configure IWHI monitoring?\n"
+        "-----------------------------------------------------------\n"
+        "2024-01-06\nDeploy went fine, all green here.\n")
+    assert results['total_questions'] == 1  # not a phantom 2x group
+    assert results['total_groups'] == 0
