@@ -102,6 +102,31 @@ def test_analyze_missing_file():
     assert result.exit_code != 0
 
 
+def test_doctor_reports_unreachable_ollama(monkeypatch):
+    import requests as requests_module
+
+    def refuse(*args, **kwargs):
+        raise requests_module.ConnectionError('refused')
+
+    monkeypatch.setattr('requests.get', refuse)
+    result = CliRunner().invoke(cli, ['doctor'])
+    assert result.exit_code == 1
+    assert 'Ollama reachable' in result.output
+    assert 'ollama.com/download' in result.output
+
+
+def test_doctor_all_good(monkeypatch):
+    class FakeResponse:
+        def json(self):
+            return {'models': [{'name': 'nomic-embed-text:latest'},
+                               {'name': 'llama3.2:latest'}]}
+
+    monkeypatch.setattr('requests.get', lambda *a, **k: FakeResponse())
+    result = CliRunner().invoke(cli, ['doctor'])
+    assert result.exit_code == 0, result.output
+    assert 'All good!' in result.output
+
+
 def test_validate_reports_question_count(input_file):
     result = CliRunner().invoke(cli, ['validate', str(input_file)])
     assert result.exit_code == 0, result.output

@@ -383,6 +383,73 @@ def _contents_from_upload():
     return contents
 
 
+# ---------------------------------------------------------------------------
+# Model management: pull missing Ollama models from the dashboard, so new
+# users never have to run 'ollama pull' by hand
+# ---------------------------------------------------------------------------
+
+_model_pulls = {}
+_pulls_lock = threading.Lock()
+
+
+def _pullable_models():
+    return {os.getenv('OLLAMA_MODEL', 'nomic-embed-text'),
+            os.getenv('OLLAMA_GENERATION_MODEL', 'llama3.2')}
+
+
+def _run_model_pull(model):
+    ollama_url = os.getenv('OLLAMA_URL', 'http://localhost:11434').rstrip('/')
+    try:
+        with requests.post(f"{ollama_url}/api/pull", json={'name': model},
+                           stream=True, timeout=3600) as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if not line:
+                    continue
+                info = json.loads(line)
+                if info.get('error'):
+                    raise RuntimeError(info['error'])
+                with _pulls_lock:
+                    state = _model_pulls[model]
+                    state['detail'] = info.get('status', '')
+                    if info.get('total'):
+                        state['total'] = info['total']
+                        state['completed'] = info.get('completed', 0)
+        with _pulls_lock:
+            _model_pulls[model]['status'] = 'done'
+        logger.info("Pulled Ollama model %s", model)
+    except Exception as e:
+        logger.exception("Model pull failed for %s", model)
+        with _pulls_lock:
+            _model_pulls[model].update(status='error', detail=str(e))
+
+
+@app.route('/api/models/pull', methods=['POST'])
+def pull_model():
+    """Start downloading a configured Ollama model (idempotent)."""
+    data = request.get_json(silent=True) or {}
+    model = data.get('model')
+    if model not in _pullable_models():
+        return jsonify({'success': False,
+                        'error': f"'{model}' is not one of the configured models"}), 400
+    with _pulls_lock:
+        state = _model_pulls.get(model)
+        if state and state['status'] == 'pulling':
+            return jsonify({'success': True, 'status': 'pulling'}), 202
+        _model_pulls[model] = {'status': 'pulling', 'completed': 0, 'total': 0, 'detail': ''}
+    threading.Thread(target=_run_model_pull, args=(model,), daemon=True).start()
+    return jsonify({'success': True, 'status': 'pulling'}), 202
+
+
+@app.route('/api/models/pull/<model>', methods=['GET'])
+def pull_model_status(model):
+    with _pulls_lock:
+        state = _model_pulls.get(model)
+        if state is None:
+            return jsonify({'success': False, 'error': 'No pull in progress'}), 404
+        return jsonify({'success': True, **state})
+
+
 @app.route('/api/analyze', methods=['POST'])
 def analyze_transcript():
     """
@@ -622,13 +689,21 @@ if __name__ == '__main__':
     # Re-queue any jobs that were interrupted by the last shutdown
     recover_interrupted_jobs()
 
+    display_host = 'localhost' if host in ('0.0.0.0', '127.0.0.1') else host
+    dashboard_url = f"http://{display_host}:{port}/"
+
     print("=" * 60)
     print("Slack Question Analyzer")
     print("=" * 60)
-    print(f"Dashboard:    http://{host}:{port}/")
-    print(f"Health check: http://{host}:{port}/api/health")
-    print(f"API:          POST http://{host}:{port}/api/analyze")
+    print(f"Dashboard:    {dashboard_url}")
+    print(f"Health check: {dashboard_url}api/health")
+    print(f"API:          POST {dashboard_url}api/analyze")
     print("=" * 60)
     print("\nPress Ctrl+C to stop the server\n")
+
+    # Open the dashboard automatically (NO_BROWSER=1 disables; set in Docker)
+    if os.getenv('NO_BROWSER', '').lower() not in ('1', 'true', 'on') and not debug:
+        import webbrowser
+        threading.Timer(1.5, lambda: webbrowser.open(dashboard_url)).start()
 
     app.run(debug=debug, host=host, port=port, threaded=True)

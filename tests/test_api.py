@@ -250,6 +250,58 @@ def test_done_job_status_served_from_disk_after_restart(client, fake_engine):
     assert body['data']['total_questions'] == 3
 
 
+def test_model_pull_endpoint(client, monkeypatch):
+    monkeypatch.setattr(api_server, '_model_pulls', {})
+
+    class FakePullResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def raise_for_status(self):
+            pass
+
+        def iter_lines(self):
+            yield json.dumps({'status': 'downloading', 'total': 100, 'completed': 50}).encode()
+            yield json.dumps({'status': 'success', 'total': 100, 'completed': 100}).encode()
+
+    monkeypatch.setattr(api_server.requests, 'post', lambda *a, **k: FakePullResponse())
+
+    # Only configured models can be pulled
+    assert client.post('/api/models/pull', json={'model': 'evil/backdoor'}).status_code == 400
+
+    assert client.post('/api/models/pull', json={'model': 'nomic-embed-text'}).status_code == 202
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        status = client.get('/api/models/pull/nomic-embed-text').get_json()
+        if status['status'] in ('done', 'error'):
+            break
+        time.sleep(0.05)
+    assert status['status'] == 'done'
+    assert status['completed'] == 100
+
+
+def test_model_pull_reports_errors(client, monkeypatch):
+    monkeypatch.setattr(api_server, '_model_pulls', {})
+
+    def refuse(*args, **kwargs):
+        raise api_server.requests.exceptions.ConnectionError('refused')
+
+    monkeypatch.setattr(api_server.requests, 'post', refuse)
+    assert client.post('/api/models/pull', json={'model': 'llama3.2'}).status_code == 202
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        status = client.get('/api/models/pull/llama3.2').get_json()
+        if status['status'] in ('done', 'error'):
+            break
+        time.sleep(0.05)
+    assert status['status'] == 'error'
+
+    assert client.get('/api/models/pull/never-started').status_code == 404
+
+
 def test_health_validates_azure_and_openai_keys(client, monkeypatch):
     monkeypatch.delenv('AZURE_OPENAI_API_KEY', raising=False)
     monkeypatch.delenv('OPENAI_API_KEY', raising=False)

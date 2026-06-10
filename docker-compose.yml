@@ -1,8 +1,7 @@
 # Full stack: the analyzer (API + dashboard) and a local Ollama.
+# Models are pulled automatically on first start.
 #
 #   docker compose up -d
-#   docker compose exec ollama ollama pull nomic-embed-text
-#   docker compose exec ollama ollama pull llama3.2   # optional, enables LLM features
 #
 # Dashboard: http://localhost:5000
 
@@ -16,6 +15,8 @@ services:
     volumes:
       - analyses:/app/analyses
       - embedding-cache:/app/.embedding_cache
+      - llm-cache:/app/.llm_cache
+      - jobs:/app/jobs
     depends_on:
       - ollama
     restart: unless-stopped
@@ -26,7 +27,20 @@ services:
       - ollama-models:/root/.ollama
     restart: unless-stopped
 
+  # One-shot: downloads the models into the shared volume on first start
+  model-init:
+    image: ollama/ollama
+    depends_on:
+      - ollama
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c",
+                 "sleep 3 && ollama pull nomic-embed-text && ollama pull llama3.2"]
+    restart: "no"
+
 volumes:
   analyses:
   embedding-cache:
+  llm-cache:
+  jobs:
   ollama-models:
