@@ -176,6 +176,90 @@ def setup():
 
 
 @cli.command()
+def doctor():
+    """
+    Check that everything needed for analysis is installed and reachable.
+
+    Run this on a new machine (and send the output when asking for help).
+    """
+    import os
+    import requests
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    failures = 0
+
+    def check(ok, label, fix=''):
+        nonlocal failures
+        mark = 'OK  ' if ok else 'FAIL'
+        click.echo(f"[{mark}] {label}")
+        if not ok:
+            failures += 1
+            if fix:
+                click.echo(f"       fix: {fix}")
+
+    check(sys.version_info >= (3, 10),
+          f"Python {sys.version_info.major}.{sys.version_info.minor} (need 3.10+)",
+          'Install Python 3.10 or newer from https://python.org')
+
+    try:
+        import numpy, sklearn, flask  # noqa: F401
+        check(True, 'Python dependencies installed')
+    except ImportError as e:
+        check(False, f'Python dependencies ({e.name} missing)',
+              'pip install -e .')
+
+    provider = os.getenv('AI_PROVIDER', 'ollama')
+    click.echo(f"[INFO] Provider: {provider}")
+
+    if provider == 'ollama':
+        url = os.getenv('OLLAMA_URL', 'http://localhost:11434').rstrip('/')
+        embed_model = os.getenv('OLLAMA_MODEL', 'nomic-embed-text')
+        gen_model = os.getenv('OLLAMA_GENERATION_MODEL', 'llama3.2')
+        try:
+            names = [m.get('name', '') for m in
+                     requests.get(f"{url}/api/tags", timeout=3).json().get('models', [])]
+            check(True, f'Ollama reachable at {url}')
+            has = lambda m: any(n == m or n.startswith(m + ':') for n in names)  # noqa: E731
+            check(has(embed_model), f"Embedding model '{embed_model}' downloaded",
+                  f'ollama pull {embed_model}')
+            if has(gen_model):
+                check(True, f"Chat model '{gen_model}' downloaded (topic labels enabled)")
+            else:
+                click.echo(f"[WARN] Chat model '{gen_model}' not downloaded — topic "
+                           f"labels/summaries will fall back to keywords")
+                click.echo(f"       fix: ollama pull {gen_model}")
+        except requests.RequestException:
+            check(False, f'Ollama reachable at {url}',
+                  'Install from https://ollama.com/download, then start it (ollama serve)')
+    elif provider == 'azure':
+        check(bool(os.getenv('AZURE_OPENAI_API_KEY') and os.getenv('AZURE_OPENAI_ENDPOINT')),
+              'Azure OpenAI credentials configured',
+              'Set AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT in .env')
+    else:
+        check(bool(os.getenv('OPENAI_API_KEY')), 'OpenAI API key configured',
+              'Set OPENAI_API_KEY in .env')
+
+    try:
+        cache_dir = Path(os.getenv('EMBEDDING_CACHE_DIR', '.embedding_cache'))
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        probe = cache_dir / '.doctor-probe'
+        probe.write_text('ok', encoding='utf-8')
+        probe.unlink()
+        check(True, 'Working directory is writable (caches, analyses)')
+    except OSError:
+        check(False, 'Working directory is writable',
+              'Run from a folder you can write to')
+
+    click.echo()
+    if failures:
+        click.echo(f"{failures} problem(s) found — fix the items above and re-run "
+                   f"'slack-analyzer doctor'.")
+        sys.exit(1)
+    click.echo("All good! Start the app with: python api_server.py")
+
+
+@cli.command()
 @click.argument('input_file', type=click.Path(exists=True))
 def validate(input_file):
     """
