@@ -90,7 +90,7 @@ function UploadModal({ open, onClose, onImported }) {
       }
 
       const content = await file.text();
-      const data = await window.QA_API.analyze(content, { provider: 'ollama', threshold: 0.85 }, onProgress);
+      const data = await window.QA_API.analyze(content, window.QA_SETTINGS.get(), onProgress);
 
       setProgress(100);
       setResults(data);
@@ -232,4 +232,133 @@ function SignInModal({ open, onClose, account, onConnect, onDisconnect }) {
   );
 }
 
-Object.assign(window, { UploadModal, SignInModal });
+// ---- Analysis history ----
+function HistoryModal({ open, onClose, onLoad }) {
+  const { Button } = window.QuestionAnalyzerDesignSystem_03a921;
+  const [items, setItems] = React.useState(null); // null = loading
+  const [error, setError] = React.useState(null);
+  const [loadingId, setLoadingId] = React.useState(null);
+
+  React.useEffect(() => {
+    if (!open) return;
+    setItems(null); setError(null); setLoadingId(null);
+    window.QA_API.listAnalyses()
+      .then(setItems)
+      .catch((err) => setError(err.message));
+  }, [open]);
+
+  const pick = async (id) => {
+    setLoadingId(id);
+    try {
+      const data = await window.QA_API.getAnalysis(id);
+      onLoad(data);
+    } catch (err) {
+      setError(err.message);
+      setLoadingId(null);
+    }
+  };
+
+  const when = (iso) => iso ? new Date(iso).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+
+  return (
+    <Modal open={open} onClose={onClose} width={560}>
+      <ModalHead title="Analysis history" sub="Every analysis is saved automatically. Load a past one to revisit it in the dashboard." onClose={onClose} />
+      <div style={{ padding: '0 24px 24px' }}>
+        {error ? (
+          <div style={{ fontSize: 13, color: 'var(--red-60)', padding: '14px 16px', background: 'var(--gray-10)', borderLeft: '3px solid var(--red-60)', marginBottom: 16 }}>{error}</div>
+        ) : null}
+
+        {items === null && !error ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--text-secondary)', fontSize: 13.5, padding: '18px 0' }}>
+            <Icon name="loader" size={16} /> Loading history…
+          </div>
+        ) : null}
+
+        {items && items.length === 0 ? (
+          <div style={{ textAlign: 'center', color: 'var(--text-helper)', fontSize: 13.5, padding: '26px 0 18px' }}>
+            No saved analyses yet. Upload a transcript to create your first one.
+          </div>
+        ) : null}
+
+        {items && items.length > 0 ? (
+          <div style={{ border: '1px solid var(--border-subtle)', borderBottom: 'none', maxHeight: 360, overflowY: 'auto' }}>
+            {items.map((item) => (
+              <button key={item.id} onClick={() => pick(item.id)} disabled={loadingId !== null}
+                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '14px 16px', background: '#fff', border: 'none', borderBottom: '1px solid var(--border-subtle)', cursor: loadingId ? 'wait' : 'pointer', fontFamily: 'var(--font-sans)' }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--gray-10)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = '#fff'; }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
+                  <span style={{ fontSize: 13.5, fontWeight: 500, color: 'var(--text-primary)' }}>{when(item.analyzed_at)}</span>
+                  <span style={{ fontSize: 12, color: 'var(--text-helper)', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>
+                    {loadingId === item.id ? 'Loading…' : `${item.total_questions} questions · ${item.total_groups} groups`}
+                  </span>
+                </div>
+                {item.top_question ? (
+                  <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    Top: {item.top_question}
+                  </div>
+                ) : null}
+              </button>
+            ))}
+          </div>
+        ) : null}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
+          <Button variant="ghost" onClick={onClose}>Close</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ---- Analysis settings (provider + similarity threshold) ----
+function SettingsModal({ open, onClose }) {
+  const { Button, Slider } = window.QuestionAnalyzerDesignSystem_03a921;
+  const [settings, setSettings] = React.useState(window.QA_SETTINGS.get());
+  const providers = [
+    { key: 'ollama', label: 'Ollama', hint: 'Local & free' },
+    { key: 'azure', label: 'Azure OpenAI', hint: 'Needs API key' },
+    { key: 'openai', label: 'OpenAI', hint: 'Needs API key' },
+  ];
+
+  React.useEffect(() => {
+    if (open) window.QA_SETTINGS.loadServerDefaults().then(setSettings);
+  }, [open]);
+
+  const save = () => { window.QA_SETTINGS.set(settings); onClose(); };
+
+  return (
+    <Modal open={open} onClose={onClose} width={480}>
+      <ModalHead title="Analysis settings" sub="Applied to every new transcript analysis. Provider credentials are configured in the backend's .env file." onClose={onClose} />
+      <div style={{ padding: '0 24px 24px' }}>
+        <label style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 8 }}>AI provider</label>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 24 }}>
+          {providers.map((p) => {
+            const active = settings.provider === p.key;
+            return (
+              <button key={p.key} onClick={() => setSettings({ ...settings, provider: p.key })}
+                style={{ padding: '12px 10px', textAlign: 'left', cursor: 'pointer', fontFamily: 'var(--font-sans)', background: active ? 'var(--blue-60)' : 'var(--field)', color: active ? '#fff' : 'var(--text-primary)', border: `1px solid ${active ? 'var(--blue-60)' : 'var(--border-strong)'}`, transition: 'background var(--duration-base), border-color var(--duration-base)' }}>
+                <div style={{ fontSize: 13.5, fontWeight: 500 }}>{p.label}</div>
+                <div style={{ fontSize: 11.5, marginTop: 3, color: active ? 'rgba(255,255,255,.75)' : 'var(--text-helper)' }}>{p.hint}</div>
+              </button>
+            );
+          })}
+        </div>
+
+        <Slider label="Similarity threshold" value={Math.round(settings.threshold * 100)}
+          min={50} max={100} step={1} format={(v) => `${v}%`}
+          onChange={(v) => setSettings({ ...settings, threshold: v / 100 })} />
+        <div style={{ fontSize: 12, color: 'var(--text-helper)', margin: '10px 0 22px', lineHeight: 1.5 }}>
+          Higher = stricter grouping (questions must be nearly identical). Lower = broader topics.
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" icon={<Icon name="check" size={16} />} onClick={save}>Save settings</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+Object.assign(window, { UploadModal, SignInModal, HistoryModal, SettingsModal });

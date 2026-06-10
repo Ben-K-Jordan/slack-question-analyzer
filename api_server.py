@@ -30,6 +30,7 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 
 from src.analyzer import QuestionAnalyzer
+from src.weekly_stats import compute_weekly_stats
 
 load_dotenv()
 
@@ -274,6 +275,35 @@ def latest_analysis():
         return jsonify({'success': False, 'error': 'No saved analyses yet'}), 404
     data = _load_analysis(summaries[0]['id'])
     return jsonify({'success': True, 'id': summaries[0]['id'], 'data': data})
+
+
+@app.route('/api/analyses/latest/weekly', methods=['GET'])
+def latest_weekly():
+    """Week-in-Review stats for the most recent saved analysis."""
+    summaries = _list_analyses()
+    if not summaries:
+        return jsonify({'success': False, 'error': 'No saved analyses yet'}), 404
+    return _weekly_response(summaries[0]['id'])
+
+
+@app.route('/api/analyses/<analysis_id>/weekly', methods=['GET'])
+def analysis_weekly(analysis_id):
+    """Week-in-Review stats for a specific saved analysis."""
+    return _weekly_response(analysis_id)
+
+
+def _weekly_response(analysis_id):
+    data = _load_analysis(analysis_id)
+    if data is None:
+        return jsonify({'success': False, 'error': 'Analysis not found'}), 404
+    weekly = compute_weekly_stats(data)
+    if weekly is None:
+        return jsonify({
+            'success': False,
+            'error': 'No parseable question dates in this analysis, so weekly '
+                     'trends cannot be computed.'
+        }), 422
+    return jsonify({'success': True, 'id': analysis_id, 'data': weekly})
 
 
 @app.route('/api/analyses/<analysis_id>', methods=['GET'])

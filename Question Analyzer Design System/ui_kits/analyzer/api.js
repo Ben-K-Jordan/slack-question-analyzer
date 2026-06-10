@@ -29,6 +29,28 @@
     }
   }
 
+  // Summaries of all saved analyses, newest first.
+  async function listAnalyses() {
+    const data = await getJSON('/api/analyses');
+    return data.analyses;
+  }
+
+  // Full results of one saved analysis.
+  async function getAnalysis(id) {
+    const data = await getJSON(`/api/analyses/${encodeURIComponent(id)}`);
+    return data.data;
+  }
+
+  // Week-in-Review stats for the latest analysis, or null when unavailable.
+  async function latestWeekly() {
+    try {
+      const data = await getJSON('/api/analyses/latest/weekly');
+      return data.data;
+    } catch (err) {
+      return null;
+    }
+  }
+
   // Start an analysis job and poll until it finishes.
   // onProgress receives {stage, completed, total} as the backend reports it.
   async function analyze(content, { provider = 'ollama', threshold = 0.85 } = {}, onProgress) {
@@ -51,5 +73,37 @@
     }
   }
 
-  window.QA_API = { API_BASE, health, latestAnalysis, analyze };
+  window.QA_API = { API_BASE, health, latestAnalysis, listAnalyses, getAnalysis, latestWeekly, analyze };
+
+  // ---- Analysis settings (provider + threshold), persisted locally ----
+  const SETTINGS_KEY = 'qa-analysis-settings';
+  const DEFAULT_SETTINGS = { provider: 'ollama', threshold: 0.85 };
+
+  function getSettings() {
+    try {
+      const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY));
+      return { ...DEFAULT_SETTINGS, ...(stored || {}) };
+    } catch (err) {
+      return { ...DEFAULT_SETTINGS };
+    }
+  }
+
+  function setSettings(settings) {
+    const merged = { ...getSettings(), ...settings };
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(merged)); } catch (err) { /* private mode */ }
+    return merged;
+  }
+
+  // Seed defaults from the server's configuration the first time.
+  async function loadServerDefaults() {
+    try {
+      const data = await getJSON('/api/config');
+      if (!localStorage.getItem(SETTINGS_KEY) && data.config) {
+        setSettings({ provider: data.config.provider, threshold: data.config.threshold });
+      }
+    } catch (err) { /* backend offline; local defaults apply */ }
+    return getSettings();
+  }
+
+  window.QA_SETTINGS = { get: getSettings, set: setSettings, loadServerDefaults };
 })();

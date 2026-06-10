@@ -92,6 +92,27 @@ def test_latest_analysis_404_when_empty(client):
     assert client.get('/api/analyses/latest').status_code == 404
 
 
+def test_weekly_stats_endpoint(client, fake_engine):
+    job_id = client.post('/api/analyze', json={'content': SAMPLE_CONTENT}).get_json()['job_id']
+    finished = wait_for_job(client, job_id)
+
+    latest = client.get('/api/analyses/latest/weekly')
+    assert latest.status_code == 200
+    weekly = latest.get_json()['data']
+    # All three sample questions fall inside the week ending 2024-01-09
+    assert weekly['totalThisWeek'] == 3
+    assert weekly['groups'][0]['count'] == 2
+
+    by_id = client.get(f"/api/analyses/{finished['analysis_id']}/weekly")
+    assert by_id.status_code == 200
+    assert by_id.get_json()['data']['totalThisWeek'] == 3
+
+
+def test_weekly_stats_404s(client):
+    assert client.get('/api/analyses/latest/weekly').status_code == 404
+    assert client.get('/api/analyses/nope/weekly').status_code == 404
+
+
 def test_analysis_path_traversal_blocked(client):
     assert client.get('/api/analyses/..%2F..%2Fetc%2Fpasswd').status_code == 404
 

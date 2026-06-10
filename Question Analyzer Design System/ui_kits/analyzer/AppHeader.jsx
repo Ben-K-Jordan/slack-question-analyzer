@@ -1,8 +1,16 @@
 // App header: brand, animated Dashboard | Week in Review toggle,
 // Upload transcript, and the account / sign-in avatar.
-function AppHeader({ view, setView, onUpload, account, onAvatar, onManage }) {
+function AppHeader({ view, setView, onUpload, onHistory, onSettings, account, onAvatar, onManage }) {
   const segs = [{ key: 'dashboard', label: 'Dashboard' }, { key: 'week', label: 'Week in Review' }];
   const activeIdx = segs.findIndex((s) => s.key === view);
+
+  const iconBtn = {
+    width: 32, height: 32, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    background: 'transparent', color: 'var(--gray-30)', border: '1px solid var(--gray-70)',
+    cursor: 'pointer', transition: 'background var(--duration-base) var(--ease-productive), color var(--duration-base)',
+  };
+  const hover = (e) => { e.currentTarget.style.background = 'var(--gray-80)'; e.currentTarget.style.color = '#fff'; };
+  const unhover = (e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gray-30)'; };
 
   const seg = (s, i) => ({
     position: 'relative', zIndex: 1, height: 32, padding: '0 18px',
@@ -39,6 +47,16 @@ function AppHeader({ view, setView, onUpload, account, onAvatar, onManage }) {
           onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--gray-80)'; e.currentTarget.style.borderColor = 'var(--gray-50)'; }}
           onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'var(--gray-70)'; }}>
           <Icon name="upload" size={15} /> Upload transcript
+        </button>
+
+        <button onClick={onHistory} title="Analysis history" aria-label="Analysis history"
+          style={iconBtn} onMouseEnter={hover} onMouseLeave={unhover}>
+          <Icon name="history" size={16} />
+        </button>
+
+        <button onClick={onSettings} title="Analysis settings" aria-label="Analysis settings"
+          style={iconBtn} onMouseEnter={hover} onMouseLeave={unhover}>
+          <Icon name="settings" size={16} />
         </button>
 
         {account ? (

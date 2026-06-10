@@ -244,6 +244,14 @@ Upload a transcript via the upload modal. The progress bar reflects real backend
 (per-embedding), and completed analyses are saved to `analyses/` — the dashboard
 automatically reloads your most recent analysis after a page refresh.
 
+Dashboard features:
+- **History** (clock icon): browse and reload any past analysis
+- **Settings** (gear icon): choose the AI provider and similarity threshold used for
+  new analyses (persisted in the browser)
+- **Week in Review**: real weekly trends computed from your latest analysis — volume
+  vs last week, 6-week trend, and per-topic rank movement (weeks are anchored to the
+  most recent question date in the transcript, so historical exports work too)
+
 Server settings via environment variables: `API_HOST` (default `127.0.0.1`),
 `API_PORT` (default `5000`), `FLASK_DEBUG`, `MAX_CONTENT_MB` (default `50`),
 `ANALYSES_DIR` (default `analyses/`).
@@ -258,6 +266,8 @@ Server settings via environment variables: `API_HOST` (default `127.0.0.1`),
 | `/api/analyses` | GET | List of saved past analyses (newest first) |
 | `/api/analyses/latest` | GET | Full results of the most recent analysis |
 | `/api/analyses/<id>` | GET | Full results of a specific analysis |
+| `/api/analyses/latest/weekly` | GET | Week-in-Review stats for the most recent analysis |
+| `/api/analyses/<id>/weekly` | GET | Week-in-Review stats for a specific analysis |
 | `/api/config` | GET | Current provider/threshold configuration |
 
 A finished job's `data` field contains the same JSON structure shown in
