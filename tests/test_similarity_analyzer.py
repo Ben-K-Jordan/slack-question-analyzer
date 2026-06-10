@@ -25,7 +25,8 @@ def test_groups_similar_questions(monkeypatch):
         [0.99, 0.05, 0.0],
         [0.0, 1.0, 0.0],
     ])
-    monkeypatch.setattr(analyzer, 'get_embeddings_batch', lambda texts: fake_embeddings)
+    monkeypatch.setattr(analyzer, 'get_embeddings_batch',
+                        lambda texts, progress_callback=None: fake_embeddings)
 
     questions = [question('How do I reset my password?'),
                  question('How can I reset my password?'),

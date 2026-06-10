@@ -16,7 +16,7 @@ class QuestionAnalyzer:
     """Main analyzer class that coordinates the analysis pipeline."""
 
     def __init__(self, provider: Optional[Literal['azure', 'openai', 'ollama']] = None,
-                 use_disk_cache: bool = True):
+                 use_disk_cache: bool = True, threshold: Optional[float] = None):
         """
         Initialize the analyzer.
 
@@ -24,6 +24,8 @@ class QuestionAnalyzer:
             provider: AI provider to use ('azure', 'openai', or 'ollama').
                      If None, reads from AI_PROVIDER env variable (defaults to 'ollama')
             use_disk_cache: Persist embeddings to disk so repeat runs are fast
+            threshold: Similarity threshold (0-1). Overrides the
+                       SIMILARITY_THRESHOLD env variable when given.
         """
         load_dotenv()
 
@@ -32,23 +34,35 @@ class QuestionAnalyzer:
 
         self.extractor = QuestionExtractor()
         self.similarity_analyzer = SimilarityAnalyzer(provider=provider,
-                                                      use_disk_cache=use_disk_cache)
+                                                      use_disk_cache=use_disk_cache,
+                                                      threshold=threshold)
 
-    def analyze_slack_content(self, content: str) -> Dict:
+    def analyze_slack_content(self, content: str, progress_callback=None) -> Dict:
         """
         Analyze Slack content and return grouped questions.
 
         Args:
             content: Raw Slack content string
+            progress_callback: Optional fn(stage, completed, total) reporting
+                progress. Stages: 'extracting', 'embedding', 'grouping',
+                'keywords', 'complete'. For 'embedding', completed/total count
+                individual embeddings; other stages report (0, 1) then (1, 1).
 
         Returns:
             Dictionary containing analysis results
         """
+        def report(stage, completed=0, total=1):
+            if progress_callback:
+                progress_callback(stage, completed, total)
+
+        report('extracting')
         print("Step 1: Extracting questions from Slack content...")
         questions = self.extractor.parse_slack_content(content)
         print(f"Found {len(questions)} questions")
+        report('extracting', 1, 1)
 
         if not questions:
+            report('complete', 1, 1)
             return {
                 'total_questions': 0,
                 'total_groups': 0,
@@ -58,14 +72,19 @@ class QuestionAnalyzer:
             }
 
         print("\nStep 2: Grouping similar questions using AI...")
-        groups = self.similarity_analyzer.group_similar_questions(questions)
+        groups = self.similarity_analyzer.group_similar_questions(
+            questions,
+            progress_callback=(lambda done, total: report('embedding', done, total))
+        )
         print(f"Created {len(groups)} question groups")
+        report('grouping', 1, 1)
 
         # Add keywords and date ranges to each group
         print("\nStep 3: Extracting keywords from groups...")
         for group in groups:
             group['keywords'] = self._extract_keywords(group['questions'])
             group['date_range'] = self._date_range(group['questions'])
+        report('keywords', 1, 1)
 
         # Separate single-question groups
         multi_question_groups = [g for g in groups if g['count'] > 1]
@@ -79,6 +98,7 @@ class QuestionAnalyzer:
             'metadata': self._metadata()
         }
 
+        report('complete', 1, 1)
         return result
 
     def _metadata(self) -> Dict:

@@ -1,6 +1,7 @@
 // Question Analyzer — consolidated app.
 function App() {
   const [view, setView] = React.useState('dashboard');
+  const [analysisVersion, setAnalysisVersion] = React.useState(0);
   const [uploadOpen, setUploadOpen] = React.useState(false);
   const [signInOpen, setSignInOpen] = React.useState(false);
   const [account, setAccount] = React.useState(null);
@@ -18,12 +19,12 @@ function App() {
       <AppHeader view={view} setView={setView} onUpload={() => setUploadOpen(true)}
         account={account} onAvatar={() => setSignInOpen(true)} onManage={() => setSignInOpen(true)} />
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', background: '#fff' }}>
-        <div key={view} className="qa-view">
+        <div key={`${view}:${analysisVersion}`} className="qa-view">
           {view === 'dashboard' ? <DashboardView /> : <WeekView />}
         </div>
       </div>
       <UploadModal open={uploadOpen} onClose={() => setUploadOpen(false)}
-        onImported={() => { setUploadOpen(false); setView('dashboard'); }} />
+        onImported={() => { setUploadOpen(false); setView('dashboard'); setAnalysisVersion((v) => v + 1); }} />
       <SignInModal open={signInOpen} onClose={() => setSignInOpen(false)}
         account={account} onConnect={connect} onDisconnect={disconnect} />
     </div>

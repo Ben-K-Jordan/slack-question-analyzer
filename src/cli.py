@@ -2,7 +2,6 @@
 Command-line interface for the Slack Question Analyzer.
 """
 
-import os
 import sys
 import click
 from pathlib import Path
@@ -41,13 +40,10 @@ def analyze(input_file, output, provider, threshold, no_summary, no_cache):
         python -m src.cli analyze slack_content.txt -o results.json
     """
     try:
-        # Set threshold if provided
-        if threshold is not None:
-            os.environ['SIMILARITY_THRESHOLD'] = str(threshold)
-
         # Initialize analyzer
         click.echo(f"Initializing analyzer with provider: {provider or 'from .env (default: ollama)'}")
-        analyzer = QuestionAnalyzer(provider=provider, use_disk_cache=not no_cache)
+        analyzer = QuestionAnalyzer(provider=provider, use_disk_cache=not no_cache,
+                                    threshold=threshold)
         
         # Set default output path if not provided
         if not output:

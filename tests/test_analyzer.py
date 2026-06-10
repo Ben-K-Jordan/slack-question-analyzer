@@ -32,7 +32,7 @@ def analyzer(monkeypatch):
         'what is the deploy schedule for production releases?': [0.0, 1.0, 0.0],
     }
 
-    def fake_batch(texts):
+    def fake_batch(texts, progress_callback=None):
         return np.array([vectors[t] for t in texts])
 
     monkeypatch.setattr(analyzer.similarity_analyzer, 'get_embeddings_batch', fake_batch)
