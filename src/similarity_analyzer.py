@@ -5,280 +5,402 @@ Groups similar questions together using semantic similarity.
 """
 
 import os
-import requests
-from typing import List, Dict, Literal
+import json
+import time
+import hashlib
+import tempfile
+from pathlib import Path
+from typing import List, Dict, Literal, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import requests
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 from openai import AzureOpenAI, OpenAI
 from dotenv import load_dotenv
 
 
+class EmbeddingError(Exception):
+    """Raised when embeddings could not be retrieved from the provider."""
+
+
+class EmbeddingCache:
+    """
+    Persistent embedding cache backed by a JSON file.
+
+    Embeddings never change for a given (model, text) pair, so caching them on
+    disk makes repeat analyses near-instant and avoids paying for the same
+    API calls twice.
+    """
+
+    def __init__(self, provider: str, model: str, cache_dir: Optional[str] = None,
+                 enabled: bool = True):
+        self.enabled = enabled
+        self._memory: Dict[str, List[float]] = {}
+        self._dirty = False
+
+        cache_dir = cache_dir or os.getenv('EMBEDDING_CACHE_DIR', '.embedding_cache')
+        safe_model = ''.join(c if c.isalnum() or c in '-_.' else '_' for c in model)
+        self.cache_path = Path(cache_dir) / f"{provider}_{safe_model}.json"
+
+        if self.enabled and self.cache_path.exists():
+            try:
+                with open(self.cache_path, 'r', encoding='utf-8') as f:
+                    self._memory = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                # Corrupt or unreadable cache: start fresh rather than failing
+                self._memory = {}
+
+    @staticmethod
+    def _key(text: str) -> str:
+        return hashlib.sha256(text.encode('utf-8')).hexdigest()
+
+    def get(self, text: str) -> Optional[List[float]]:
+        return self._memory.get(self._key(text))
+
+    def set(self, text: str, embedding: List[float]):
+        self._memory[self._key(text)] = embedding
+        self._dirty = True
+
+    def save(self):
+        """Persist the cache to disk (atomic write)."""
+        if not self.enabled or not self._dirty:
+            return
+        try:
+            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(dir=self.cache_path.parent, suffix='.tmp')
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                json.dump(self._memory, f)
+            os.replace(tmp_path, self.cache_path)
+            self._dirty = False
+        except OSError as e:
+            # Cache persistence is best-effort; analysis results are unaffected
+            print(f"Warning: could not save embedding cache: {e}")
+
+
 class SimilarityAnalyzer:
     """Analyzes question similarity using AI embeddings."""
-    
-    def __init__(self, provider: Literal['azure', 'openai', 'ollama'] = 'ollama'):
+
+    MAX_RETRIES = 3
+    RETRY_BACKOFF_SECONDS = 1.0
+    REQUEST_TIMEOUT_SECONDS = 30
+
+    def __init__(self, provider: Literal['azure', 'openai', 'ollama'] = 'ollama',
+                 use_disk_cache: bool = True):
         """
         Initialize the similarity analyzer.
-        
+
         Args:
             provider: AI provider to use ('azure', 'openai', or 'ollama')
+            use_disk_cache: Persist embeddings to disk so repeat runs are fast
         """
         load_dotenv()
-        
+
+        if provider not in ('azure', 'openai', 'ollama'):
+            raise ValueError(
+                f"Unknown provider '{provider}'. Expected 'azure', 'openai', or 'ollama'."
+            )
+
         self.provider = provider
-        self.similarity_threshold = float(os.getenv('SIMILARITY_THRESHOLD', '0.85'))
-        
+        self.similarity_threshold = self._read_threshold()
+
         if provider == 'azure':
             # Azure OpenAI configuration
+            api_key = os.getenv('AZURE_OPENAI_API_KEY')
+            endpoint = os.getenv('AZURE_OPENAI_ENDPOINT')
+            if not api_key or not endpoint:
+                raise EmbeddingError(
+                    "Azure provider requires AZURE_OPENAI_API_KEY and "
+                    "AZURE_OPENAI_ENDPOINT to be set (see 'setup' command)."
+                )
             self.client = AzureOpenAI(
-                api_key=os.getenv('AZURE_OPENAI_API_KEY'),
+                api_key=api_key,
                 api_version=os.getenv('AZURE_OPENAI_API_VERSION', '2024-02-15-preview'),
-                azure_endpoint=os.getenv('AZURE_OPENAI_ENDPOINT')
+                azure_endpoint=endpoint
             )
             self.deployment_name = os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME')
             self.embedding_model = os.getenv('EMBEDDING_MODEL', 'text-embedding-ada-002')
         elif provider == 'openai':
             # Standard OpenAI configuration
-            self.client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+            api_key = os.getenv('OPENAI_API_KEY')
+            if not api_key:
+                raise EmbeddingError(
+                    "OpenAI provider requires OPENAI_API_KEY to be set "
+                    "(see 'setup' command)."
+                )
+            self.client = OpenAI(api_key=api_key)
             self.deployment_name = None
             self.embedding_model = os.getenv('EMBEDDING_MODEL', 'text-embedding-ada-002')
         else:  # ollama
             # Local Ollama configuration
             self.client = None
-            self.ollama_url = os.getenv('OLLAMA_URL', 'http://localhost:11434')
+            self.ollama_url = os.getenv('OLLAMA_URL', 'http://localhost:11434').rstrip('/')
             self.embedding_model = os.getenv('OLLAMA_MODEL', 'nomic-embed-text')
             self.deployment_name = None
-        
-        self.embeddings_cache = {}
-    
+
+        cache_enabled = use_disk_cache and os.getenv('EMBEDDING_CACHE', 'on').lower() not in ('off', '0', 'false')
+        self.embeddings_cache = EmbeddingCache(
+            provider=provider,
+            model=self.embedding_model,
+            enabled=cache_enabled
+        )
+
+    @staticmethod
+    def _read_threshold() -> float:
+        raw = os.getenv('SIMILARITY_THRESHOLD', '0.85')
+        try:
+            threshold = float(raw)
+        except ValueError:
+            raise ValueError(f"SIMILARITY_THRESHOLD must be a number, got '{raw}'")
+        if not 0.0 <= threshold <= 1.0:
+            raise ValueError(f"SIMILARITY_THRESHOLD must be between 0 and 1, got {threshold}")
+        return threshold
+
+    def _with_retries(self, fn, description: str):
+        """Run fn() with retries and exponential backoff on transient errors."""
+        last_error = None
+        for attempt in range(1, self.MAX_RETRIES + 1):
+            try:
+                return fn()
+            except Exception as e:
+                last_error = e
+                if attempt < self.MAX_RETRIES:
+                    delay = self.RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1))
+                    print(f"Warning: {description} failed (attempt {attempt}/"
+                          f"{self.MAX_RETRIES}): {e}. Retrying in {delay:.0f}s...")
+                    time.sleep(delay)
+        raise EmbeddingError(f"{description} failed after {self.MAX_RETRIES} attempts: {last_error}") from last_error
+
+    def _ollama_embedding(self, text: str) -> List[float]:
+        """Fetch a single embedding from Ollama with timeout and retries."""
+        def call():
+            response = requests.post(
+                f"{self.ollama_url}/api/embeddings",
+                json={"model": self.embedding_model, "prompt": text},
+                timeout=self.REQUEST_TIMEOUT_SECONDS
+            )
+            response.raise_for_status()
+            data = response.json()
+            if 'embedding' not in data or not data['embedding']:
+                raise EmbeddingError(
+                    f"Ollama returned no embedding (is model "
+                    f"'{self.embedding_model}' pulled? Try: ollama pull {self.embedding_model})"
+                )
+            return data['embedding']
+
+        return self._with_retries(call, f"Ollama embedding request ({self.ollama_url})")
+
+    def _openai_embeddings(self, texts: List[str]) -> List[List[float]]:
+        """Fetch a batch of embeddings from OpenAI/Azure with retries."""
+        model = self.deployment_name if self.provider == 'azure' else self.embedding_model
+
+        def call():
+            response = self.client.embeddings.create(input=texts, model=model)
+            return [item.embedding for item in response.data]
+
+        return self._with_retries(call, f"{self.provider} embeddings request")
+
     def get_embedding(self, text: str) -> List[float]:
         """
         Get embedding vector for text.
-        
+
         Args:
             text: Text to embed
-            
+
         Returns:
             Embedding vector as list of floats
+
+        Raises:
+            EmbeddingError: If the embedding could not be retrieved
         """
-        # Check cache first
-        if text in self.embeddings_cache:
-            return self.embeddings_cache[text]
-        
-        try:
-            if self.provider == 'ollama':
-                # Use Ollama API
-                response = requests.post(
-                    f"{self.ollama_url}/api/embeddings",
-                    json={
-                        "model": self.embedding_model,
-                        "prompt": text
-                    }
-                )
-                response.raise_for_status()
-                embedding = response.json()['embedding']
-            elif self.provider == 'azure':
-                response = self.client.embeddings.create(
-                    input=text,
-                    model=self.deployment_name
-                )
-                embedding = response.data[0].embedding
-            else:  # openai
-                response = self.client.embeddings.create(
-                    input=text,
-                    model=self.embedding_model
-                )
-                embedding = response.data[0].embedding
-            
-            self.embeddings_cache[text] = embedding
-            return embedding
-            
-        except Exception as e:
-            print(f"Error getting embedding: {e}")
+        cached = self.embeddings_cache.get(text)
+        if cached is not None:
+            return cached
+
+        if self.provider == 'ollama':
+            embedding = self._ollama_embedding(text)
+        else:
+            embedding = self._openai_embeddings([text])[0]
+
+        self.embeddings_cache.set(text, embedding)
+        self.embeddings_cache.save()
+        return embedding
+
     def _get_ollama_embeddings_parallel(self, texts: List[str], max_workers: int = 5):
         """
         Get embeddings from Ollama in parallel for better performance.
-        
+
         Args:
             texts: List of texts to embed
             max_workers: Number of parallel requests (default: 5)
+
+        Raises:
+            EmbeddingError: If any embedding could not be retrieved
         """
-        def get_single_embedding(text: str) -> tuple:
-            """Helper function to get a single embedding."""
-            try:
-                response = requests.post(
-                    f"{self.ollama_url}/api/embeddings",
-                    json={
-                        "model": self.embedding_model,
-                        "prompt": text
-                    },
-                    timeout=30
-                )
-                response.raise_for_status()
-                return (text, response.json()['embedding'])
-            except Exception as e:
-                print(f"Error getting embedding for text: {e}")
-                return (text, None)
-        
-        # Process embeddings in parallel
+        errors = []
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(get_single_embedding, text): text for text in texts}
-            
+            futures = {executor.submit(self._ollama_embedding, text): text for text in texts}
+
             for future in as_completed(futures):
-                text, embedding = future.result()
-                if embedding is not None:
-                    self.embeddings_cache[text] = embedding
-    
-            raise
-    
+                text = futures[future]
+                try:
+                    self.embeddings_cache.set(text, future.result())
+                except Exception as e:
+                    errors.append((text, e))
+
+        if errors:
+            sample_text, sample_error = errors[0]
+            raise EmbeddingError(
+                f"Failed to embed {len(errors)} of {len(texts)} texts. "
+                f"First failure ('{sample_text[:60]}...'): {sample_error}"
+            )
+
     def get_embeddings_batch(self, texts: List[str]) -> np.ndarray:
         """
         Get embeddings for multiple texts efficiently.
-        
+
         Args:
             texts: List of texts to embed
-            
+
         Returns:
             2D numpy array of embeddings
+
+        Raises:
+            EmbeddingError: If embeddings could not be retrieved
         """
-        embeddings = []
-        
+        if not texts:
+            return np.empty((0, 0))
+
+        # Embed each unique text only once
+        unique_uncached = []
+        seen = set()
+        for text in texts:
+            if text not in seen and self.embeddings_cache.get(text) is None:
+                unique_uncached.append(text)
+                seen.add(text)
+
+        if unique_uncached:
+            print(f"Fetching {len(unique_uncached)} new embeddings "
+                  f"({len(texts) - len(unique_uncached)} cached)...")
+
         # Process in batches to avoid rate limits
         batch_size = 100 if self.provider != 'ollama' else 10  # Smaller batches for Ollama
-        
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:i + batch_size]
-            
-            # Check which ones are not cached
-            uncached_texts = [t for t in batch if t not in self.embeddings_cache]
-            
-            if uncached_texts:
-                try:
-                    if self.provider == 'ollama':
-                        # Ollama with parallel processing for speed
-                        self._get_ollama_embeddings_parallel(uncached_texts)
-                    elif self.provider == 'azure':
-                        response = self.client.embeddings.create(
-                            input=uncached_texts,
-                            model=self.deployment_name
-                        )
-                        for text, data in zip(uncached_texts, response.data):
-                            self.embeddings_cache[text] = data.embedding
-                    else:  # openai
-                        response = self.client.embeddings.create(
-                            input=uncached_texts,
-                            model=self.embedding_model
-                        )
-                        for text, data in zip(uncached_texts, response.data):
-                            self.embeddings_cache[text] = data.embedding
-                        
-                except Exception as e:
-                    print(f"Error getting batch embeddings: {e}")
-                    raise
-            
-            # Get all embeddings for this batch (from cache)
-            batch_embeddings = [self.embeddings_cache[t] for t in batch]
-            embeddings.extend(batch_embeddings)
-        
+
+        for i in range(0, len(unique_uncached), batch_size):
+            batch = unique_uncached[i:i + batch_size]
+
+            if self.provider == 'ollama':
+                # Ollama only supports one prompt per request; parallelize for speed
+                self._get_ollama_embeddings_parallel(batch)
+            else:
+                for text, embedding in zip(batch, self._openai_embeddings(batch)):
+                    self.embeddings_cache.set(text, embedding)
+
+        self.embeddings_cache.save()
+
+        embeddings = []
+        for text in texts:
+            embedding = self.embeddings_cache.get(text)
+            if embedding is None:
+                raise EmbeddingError(f"Missing embedding for text: '{text[:80]}'")
+            embeddings.append(embedding)
+
         return np.array(embeddings)
-    
+
     def calculate_similarity(self, embedding1: List[float], embedding2: List[float]) -> float:
         """
         Calculate cosine similarity between two embeddings.
-        
+
         Args:
             embedding1: First embedding vector
             embedding2: Second embedding vector
-            
+
         Returns:
             Similarity score between 0 and 1
         """
         vec1 = np.array(embedding1).reshape(1, -1)
         vec2 = np.array(embedding2).reshape(1, -1)
         return cosine_similarity(vec1, vec2)[0][0]
-    
+
     def group_similar_questions(self, questions: List[Dict]) -> List[Dict]:
         """
         Group similar questions together.
-        
+
         Args:
             questions: List of question dictionaries with 'text' and 'normalized_text'
-            
+
         Returns:
             List of question groups with representative questions
         """
         if not questions:
             return []
-        
+
         print(f"Analyzing {len(questions)} questions...")
-        
+
         # Get embeddings for all normalized questions
         texts = [q['normalized_text'] for q in questions]
         embeddings = self.get_embeddings_batch(texts)
-        
+
         # Calculate similarity matrix
         similarity_matrix = cosine_similarity(embeddings)
-        
+
         # Group questions using clustering approach
         groups = []
         assigned = set()
-        
+
         for i in range(len(questions)):
             if i in assigned:
                 continue
-            
+
             # Start a new group with this question
             group_indices = [i]
             assigned.add(i)
-            
+
             # Find similar questions
             for j in range(i + 1, len(questions)):
                 if j in assigned:
                     continue
-                
+
                 # Check similarity with all questions in current group
                 max_similarity = max(similarity_matrix[j][idx] for idx in group_indices)
-                
+
                 if max_similarity >= self.similarity_threshold:
                     group_indices.append(j)
                     assigned.add(j)
-            
+
             # Create group dictionary
             group_questions = [questions[idx] for idx in group_indices]
-            
+
             # Find the most representative question (closest to centroid)
             if len(group_indices) > 1:
                 group_embeddings = embeddings[group_indices]
                 centroid = np.mean(group_embeddings, axis=0)
-                
+
                 # Find question closest to centroid
                 distances = [np.linalg.norm(emb - centroid) for emb in group_embeddings]
-                representative_idx = group_indices[np.argmin(distances)]
+                representative_idx = group_indices[int(np.argmin(distances))]
                 representative = questions[representative_idx]['text']
             else:
                 representative = questions[group_indices[0]]['text']
-            
-            # Calculate average similarity (reuse similarity_matrix)
+
+            # Calculate average pairwise similarity from the pre-computed matrix
             if len(group_indices) > 1:
-                # Extract similarities from pre-computed matrix
                 similarities = []
-                for idx1 in range(len(group_indices)):
-                    for idx2 in range(idx1 + 1, len(group_indices)):
-                        i, j = group_indices[idx1], group_indices[idx2]
-                        similarities.append(similarity_matrix[i][j])
+                for a in range(len(group_indices)):
+                    for b in range(a + 1, len(group_indices)):
+                        similarities.append(similarity_matrix[group_indices[a]][group_indices[b]])
                 avg_sim = float(np.mean(similarities)) if similarities else 1.0
             else:
                 avg_sim = 1.0
-            
+
             groups.append({
                 'representative_question': representative,
                 'questions': group_questions,
                 'count': len(group_questions),
                 'avg_similarity': avg_sim
             })
-        
+
         # Sort groups by count (most common first)
         groups.sort(key=lambda x: x['count'], reverse=True)
-        
+
         return groups

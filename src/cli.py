@@ -23,28 +23,31 @@ def cli():
 
 @cli.command()
 @click.argument('input_file', type=click.Path(exists=True))
-@click.option('--output', '-o', type=click.Path(), help='Output JSON file path')
-@click.option('--provider', '-p', type=click.Choice(['ollama', 'azure', 'openai']), 
+@click.option('--output', '-o', type=click.Path(),
+              help='Output file path (.json, .csv, or .md — format inferred from extension)')
+@click.option('--provider', '-p', type=click.Choice(['ollama', 'azure', 'openai']),
               help='AI provider to use (default: from .env or ollama)')
-@click.option('--threshold', '-t', type=float, help='Similarity threshold (0-1)')
+@click.option('--threshold', '-t', type=click.FloatRange(0.0, 1.0),
+              help='Similarity threshold (0-1)')
 @click.option('--no-summary', is_flag=True, help='Skip printing summary to console')
-def analyze(input_file, output, provider, threshold, no_summary):
+@click.option('--no-cache', is_flag=True, help='Disable the persistent embedding cache')
+def analyze(input_file, output, provider, threshold, no_summary, no_cache):
     """
     Analyze questions from a Slack content file.
-    
+
     INPUT_FILE: Path to file containing Slack messages/questions
-    
+
     Example:
         python -m src.cli analyze slack_content.txt -o results.json
     """
     try:
         # Set threshold if provided
-        if threshold:
+        if threshold is not None:
             os.environ['SIMILARITY_THRESHOLD'] = str(threshold)
-        
+
         # Initialize analyzer
         click.echo(f"Initializing analyzer with provider: {provider or 'from .env (default: ollama)'}")
-        analyzer = QuestionAnalyzer(provider=provider)
+        analyzer = QuestionAnalyzer(provider=provider, use_disk_cache=not no_cache)
         
         # Set default output path if not provided
         if not output:

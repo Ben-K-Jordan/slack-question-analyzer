@@ -5,6 +5,7 @@ Provides REST endpoints for the React frontend
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+import os
 import sys
 from pathlib import Path
 import traceback
@@ -58,14 +59,36 @@ def analyze_transcript():
         content = data['content']
         provider = data.get('provider', 'ollama')
         threshold = data.get('threshold', 0.85)
-        
+
         # Validate content
         if not content or not content.strip():
             return jsonify({
                 'success': False,
                 'error': 'Content cannot be empty'
             }), 400
-        
+
+        if provider not in ('ollama', 'azure', 'openai'):
+            return jsonify({
+                'success': False,
+                'error': f"Invalid provider '{provider}'. Use 'ollama', 'azure', or 'openai'."
+            }), 400
+
+        try:
+            threshold = float(threshold)
+        except (TypeError, ValueError):
+            return jsonify({
+                'success': False,
+                'error': 'threshold must be a number between 0 and 1'
+            }), 400
+        if not 0.0 <= threshold <= 1.0:
+            return jsonify({
+                'success': False,
+                'error': 'threshold must be between 0 and 1'
+            }), 400
+
+        # Apply the requested threshold (SimilarityAnalyzer reads it from env)
+        os.environ['SIMILARITY_THRESHOLD'] = str(threshold)
+
         # Run analysis
         analyzer = QuestionAnalyzer(provider=provider)
         results = analyzer.analyze_slack_content(content)
