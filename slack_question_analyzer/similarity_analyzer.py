@@ -114,6 +114,16 @@ class SimilarityAnalyzer:
             enabled=cache_enabled
         )
 
+        # nomic-embed-text is trained with task prefixes; embedding without one
+        # degrades quality. 'clustering:' matches our use case.
+        self.embed_prefix = ('clustering: '
+                             if self.embedding_model.startswith('nomic-embed-text')
+                             else '')
+
+        # Pairwise similarity stats from the most recent grouping run, used to
+        # suggest a better threshold when nothing groups
+        self.last_similarity_stats = None
+
     @staticmethod
     def _read_threshold() -> float:
         raw = os.getenv('SIMILARITY_THRESHOLD', '0.85')
@@ -219,6 +229,11 @@ class SimilarityAnalyzer:
         """
         if not texts:
             return np.empty((0, 0))
+
+        # Model-specific task prefix (cache keys include it, so switching
+        # prefixes never reuses stale vectors)
+        if self.embed_prefix:
+            texts = [self.embed_prefix + text for text in texts]
 
         # Embed each unique text only once
         unique_uncached = []
@@ -336,6 +351,7 @@ class SimilarityAnalyzer:
             return []
 
         logger.info("Analyzing %d questions...", len(questions))
+        self.last_similarity_stats = None
 
         # Tiers 1-2: merge duplicates without AI
         buckets = self._dedupe_questions(questions)
@@ -371,6 +387,7 @@ class SimilarityAnalyzer:
         else:
             # Calculate similarity matrix between distinct questions
             similarity_matrix = cosine_similarity(embeddings)
+            self.last_similarity_stats = self._similarity_stats(similarity_matrix)
 
             clusters = self._cluster_buckets(len(buckets), similarity_matrix)
 
@@ -441,6 +458,23 @@ class SimilarityAnalyzer:
             })
 
         return groups
+
+    @staticmethod
+    def _similarity_stats(similarity_matrix) -> Dict:
+        """
+        Distribution of pairwise similarities between distinct questions.
+        Lets users (and the UI) see whether the threshold fits their
+        embedding model — similarity scales vary a lot between models.
+        """
+        n = similarity_matrix.shape[0]
+        pairs = similarity_matrix[np.triu_indices(n, k=1)]
+        if pairs.size == 0:
+            return None
+        return {
+            'max': round(float(np.max(pairs)), 3),
+            'p90': round(float(np.percentile(pairs, 90)), 3),
+            'median': round(float(np.median(pairs)), 3),
+        }
 
     def _cluster_buckets(self, n: int, similarity_matrix) -> List[List[int]]:
         """Greedy clustering of bucket indices by the similarity threshold."""

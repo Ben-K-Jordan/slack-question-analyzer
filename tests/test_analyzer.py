@@ -55,6 +55,35 @@ def test_full_pipeline(analyzer):
     assert results['metadata']['provider'] == 'ollama'
 
 
+def test_threshold_suggestion_when_nothing_groups(monkeypatch):
+    """With a too-strict threshold, results carry stats and a suggestion."""
+    monkeypatch.setenv('SIMILARITY_THRESHOLD', '0.95')
+    monkeypatch.setenv('GROUP_LABELS', 'off')
+    analyzer = QuestionAnalyzer(provider='ollama', use_disk_cache=False)
+
+    vectors = {
+        'how do i reset my password?': [1.0, 0.0, 0.0],
+        'how can i reset my password?': [0.9, np.sqrt(1 - 0.81), 0.0],  # sim 0.9 < 0.95
+        'what is the deploy schedule for production releases?': [0.0, 0.0, 1.0],
+    }
+    monkeypatch.setattr(analyzer.similarity_analyzer, 'get_embeddings_batch',
+                        lambda texts, progress_callback=None: np.array([vectors[t] for t in texts]))
+
+    results = analyzer.analyze_slack_content(SAMPLE_CONTENT)
+    assert results['total_groups'] == 0
+
+    stats = results['metadata']['similarity_stats']
+    assert stats['max'] == 0.9
+    suggestion = QuestionAnalyzer.suggested_threshold(results)
+    assert suggestion == 0.88  # just below the best pair
+
+
+def test_no_threshold_suggestion_when_groups_exist(analyzer):
+    results = analyzer.analyze_slack_content(SAMPLE_CONTENT)
+    assert results['total_groups'] == 1
+    assert QuestionAnalyzer.suggested_threshold(results) is None
+
+
 def test_analyze_contents_merges_multiple_files(analyzer):
     """Messages from several files (e.g. a zipped export) form one corpus."""
     file1 = json.dumps([{'text': 'How do I reset my password?', 'ts': '1704412800.0'}])
