@@ -120,7 +120,7 @@ class SimilarityAnalyzer:
         try:
             threshold = float(raw)
         except ValueError:
-            raise ValueError(f"SIMILARITY_THRESHOLD must be a number, got '{raw}'")
+            raise ValueError(f"SIMILARITY_THRESHOLD must be a number, got '{raw}'") from None
         if not 0.0 <= threshold <= 1.0:
             raise ValueError(f"SIMILARITY_THRESHOLD must be between 0 and 1, got {threshold}")
         return threshold
@@ -254,7 +254,7 @@ class SimilarityAnalyzer:
                 # Ollama only supports one prompt per request; parallelize for speed
                 self._get_ollama_embeddings_parallel(batch, on_each=report)
             else:
-                for text, embedding in zip(batch, self._openai_embeddings(batch)):
+                for text, embedding in zip(batch, self._openai_embeddings(batch), strict=False):
                     self.embeddings_cache.set(text, embedding)
                     report()
 
