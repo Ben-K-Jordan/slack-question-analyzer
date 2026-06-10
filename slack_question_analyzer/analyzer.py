@@ -73,6 +73,7 @@ class QuestionAnalyzer:
         self._detect_mode = os.getenv('LLM_EXTRACTION', 'auto').lower()
         self._answers_mode = os.getenv('LLM_ANSWER_DETECTION', 'auto').lower()
         self._summary_mode = os.getenv('EXECUTIVE_SUMMARY', 'auto').lower()
+        self._themes_mode = os.getenv('THEMES', 'auto').lower()
 
     def _llm_enabled(self, mode: str) -> bool:
         """Whether an optional LLM feature should run."""
@@ -157,12 +158,22 @@ class QuestionAnalyzer:
         # groups get good names from day one
         self._seed_topic_bank_if_empty()
 
+        # Funnel stage 1: the learned topic bank's categories claim questions
+        # by classification before any pairwise clustering
+        known_topics = None
+        bank = TopicBank(model=self.similarity_analyzer.embedding_model)
+        if bank.enabled and bank.entries:
+            model = self.similarity_analyzer.embedding_model
+            known_topics = [e for e in bank.entries
+                            if not e.get('model') or e['model'] == model]
+
         logger.info("Step 2: Grouping similar questions using AI...")
         groups = self.similarity_analyzer.group_similar_questions(
             questions,
             progress_callback=(lambda done, total: report('embedding', done, total)),
             verifier=verifier,
-            auditor=auditor
+            auditor=auditor,
+            known_topics=known_topics
         )
         logger.info("Created %d question groups", len(groups))
         report('grouping', 1, 1)
@@ -196,6 +207,10 @@ class QuestionAnalyzer:
             'answered_questions': answered_total,
             'metadata': self._metadata()
         }
+
+        # Funnel stage 2: roll everything up into a handful of broad themes
+        result['themes'] = self._assign_themes(multi_question_groups,
+                                               result['ungrouped_questions'])
 
         # Optional LLM pass: 2-3 sentence executive summary
         if self._llm_enabled(self._summary_mode) and multi_question_groups:
@@ -235,23 +250,81 @@ class QuestionAnalyzer:
             if hits is not None:  # [] is a real answer: "no questions here"
                 for hit in hits:
                     text, message = batch[hit['index']]
-                    cleaned = self.extractor.strip_greeting(hit['question'])
-                    question = {
-                        'text': cleaned,
-                        'normalized_text': self.extractor.normalize_question(cleaned),
-                        'date': message.get('date') or 'Unknown',
-                        'original_message': text[:200],
-                        'llm_extracted': True,
-                    }
-                    if message.get('replies'):
-                        question['replies'] = message['replies']
-                    questions.append(question)
+                    questions.append(self._llm_question(hit['question'], text, message))
             else:
                 # LLM failed for this batch: regex keeps us from losing questions
                 questions.extend(self.extractor.questions_from_messages(
                     [message for _, message in batch]))
             report('detecting', batch_num, len(batches))
+
+        # Safety net: a fast model can wrongly return "no questions" for a
+        # whole batch, silently losing a conversation. Any message the LLM
+        # skipped that the regex extractor flags as a question gets one
+        # second look from the quality model; if that also fails, the regex
+        # version is kept — losing real questions is worse than keeping a
+        # clumsy one.
+        covered = {q.get('original_message') for q in questions}
+        suspicious = [(text, message) for text, message in candidates
+                      if text[:200] not in covered
+                      and self.extractor.extract_questions(text)]
+        if suspicious:
+            logger.info("Double-checking %d message(s) the fast model skipped "
+                        "but that look like questions...", len(suspicious))
+            for start in range(0, len(suspicious), DETECT_BATCH_SIZE):
+                batch = suspicious[start:start + DETECT_BATCH_SIZE]
+                hits = self.labeler.extract_questions([t for t, _ in batch],
+                                                      thorough=True)
+                recovered = {hit['index'] for hit in (hits or [])}
+                for hit in hits or []:
+                    text, message = batch[hit['index']]
+                    questions.append(self._llm_question(hit['question'], text, message))
+                questions.extend(self.extractor.questions_from_messages(
+                    [m for i, (_, m) in enumerate(batch) if i not in recovered]))
         return questions
+
+    def _assign_themes(self, groups: List[Dict],
+                       unique_questions: List[Dict]) -> Optional[List[Dict]]:
+        """
+        Funnel stage 2: one LLM call organizes every topic and unique question
+        into 3-6 broad themes. Each group/question gets a 'theme'; returns the
+        ordered theme list [{'name', 'count'}] for the dashboard funnel.
+        """
+        items = ([g.get('topic') or g['representative_question'] for g in groups]
+                 + [q['text'] for q in unique_questions])
+        if len(items) < 4 or not self._llm_enabled(self._themes_mode):
+            return None
+
+        logger.info("Organizing %d topic(s) into broad themes...", len(items))
+        assigned = self.labeler.assign_themes(items)
+        if not assigned:
+            return None
+
+        counts: Dict[str, int] = {}
+        for g, theme in zip(groups, assigned):
+            if theme:
+                g['theme'] = theme
+                counts[theme] = counts.get(theme, 0) + g['count']
+        for q, theme in zip(unique_questions, assigned[len(groups):]):
+            if theme:
+                q['theme'] = theme
+                counts[theme] = counts.get(theme, 0) + 1
+        return [{'name': name, 'count': count}
+                for name, count in sorted(counts.items(), key=lambda x: -x[1])]
+
+    def _llm_question(self, raw_question: str, original_text: str,
+                      message: Dict) -> Dict:
+        """Build a question dict from an LLM-extracted/rewritten question."""
+        cleaned = self.extractor.strip_greeting(raw_question)
+        question = {
+            'text': cleaned,
+            'normalized_text': self.extractor.normalize_question(cleaned),
+            'date': message.get('date') or 'Unknown',
+            'original_message': original_text[:200],
+            'llm_extracted': True,
+        }
+        if message.get('replies'):
+            question['replies'] = message['replies']
+        return question
 
     def _detect_missed_questions(self, messages: List[Dict], questions: List[Dict],
                                  report) -> List[Dict]:
