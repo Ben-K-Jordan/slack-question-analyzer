@@ -300,7 +300,9 @@ def test_default_threshold_is_model_aware(monkeypatch):
     monkeypatch.delenv('SIMILARITY_THRESHOLD', raising=False)
     monkeypatch.setenv('OLLAMA_MODEL', 'test-embed')
     analyzer = SimilarityAnalyzer(provider='ollama', use_disk_cache=False)
-    assert analyzer.similarity_threshold == 0.75  # local models score lower
+    # Field-calibrated: unrelated questions in a single-domain channel score
+    # ~0.65-0.72 with nomic, so the default must sit above that band
+    assert analyzer.similarity_threshold == 0.80
     assert analyzer.threshold_pinned is False
 
     monkeypatch.setenv('SIMILARITY_THRESHOLD', '0.9')
@@ -309,24 +311,75 @@ def test_default_threshold_is_model_aware(monkeypatch):
     assert pinned.threshold_pinned is True
 
 
-def test_threshold_auto_adjusts_when_nothing_groups(monkeypatch):
+def test_threshold_auto_adjusts_when_top_pair_stands_out(monkeypatch):
     monkeypatch.delenv('SIMILARITY_THRESHOLD', raising=False)
     monkeypatch.setenv('OLLAMA_MODEL', 'test-embed')
     analyzer = SimilarityAnalyzer(provider='ollama', use_disk_cache=False)
 
-    # Best pair similarity 0.6: below the 0.75 default, so nothing groups
-    fake = np.array([[1.0, 0.0], [0.6, 0.8], [-1.0, 0.0]])
+    # Best pair 0.78 (below the 0.80 default) but far above the other pairs:
+    # a genuine cluster the default just missed
+    fake = np.array([[1.0, 0.0, 0.0],
+                     [0.78, 0.6247, 0.0],
+                     [0.0, 0.0, 1.0]])
     monkeypatch.setattr(analyzer, 'get_embeddings_batch',
                         lambda texts, progress_callback=None: fake)
 
     questions = [question('a longer question number one?'),
                  question('a different question number two?'),
-                 question('an opposite question number three?')]
+                 question('an unrelated question number three?')]
     groups = analyzer.group_similar_questions(questions)
 
     assert analyzer.threshold_auto_adjusted is True
-    assert analyzer.similarity_threshold == 0.58  # best pair 0.6, minus 0.02
-    assert any(g['count'] == 2 for g in groups)  # the 0.6 pair merged
+    assert analyzer.similarity_threshold == 0.76  # best pair 0.78, minus 0.02
+    assert any(g['count'] == 2 for g in groups)
+
+
+def test_no_auto_adjust_into_the_noise_band(monkeypatch):
+    """
+    Regression for the real-world 70%-average blob: when ALL pairs sit in a
+    narrow band (single-domain corpus), relaxing the threshold would merge
+    unrelated topics. The analyzer must refuse and keep singletons.
+    """
+    monkeypatch.delenv('SIMILARITY_THRESHOLD', raising=False)
+    monkeypatch.setenv('OLLAMA_MODEL', 'test-embed')
+    analyzer = SimilarityAnalyzer(provider='ollama', use_disk_cache=False)
+
+    # Pairwise sims ~0.70-0.72: a dense noise band with no standout pair
+    fake = np.array([[1.0, 0.0, 0.0],
+                     [0.72, 0.6940, 0.0],
+                     [0.70, 0.2824, 0.6559]])
+    monkeypatch.setattr(analyzer, 'get_embeddings_batch',
+                        lambda texts, progress_callback=None: fake)
+
+    questions = [question('a longer question number one?'),
+                 question('a different question number two?'),
+                 question('an unrelated question number three?')]
+    groups = analyzer.group_similar_questions(questions)
+
+    assert analyzer.threshold_auto_adjusted is False
+    assert analyzer.similarity_threshold == 0.80  # unchanged
+    assert all(g['count'] == 1 for g in groups)  # honest singletons, no blob
+
+
+def test_verifier_merge_rejected_when_combined_group_is_loose(monkeypatch):
+    """An LLM 'same topic' yes cannot re-create a mixed mega-group."""
+    analyzer = make_analyzer(monkeypatch, threshold='0.85')
+
+    matrix = np.array([
+        [1.00, 0.90, 0.84, 0.20],
+        [0.90, 1.00, 0.20, 0.20],
+        [0.84, 0.20, 1.00, 0.90],
+        [0.20, 0.20, 0.90, 1.00],
+    ])
+
+    def never(a, b):
+        raise AssertionError('verifier must not be consulted for a loose merge')
+
+    buckets = [[question(f'question number {i}?')] for i in range(4)]
+    clusters = analyzer._merge_borderline_clusters(
+        [[0, 1], [2, 3]], matrix, buckets, never)
+    # Combined avg would be (.9+.9+.84+.2+.2+.2)/6 = 0.54: guard skips it
+    assert clusters == [[0, 1], [2, 3]]
 
 
 def test_pinned_threshold_never_auto_adjusts(monkeypatch):
