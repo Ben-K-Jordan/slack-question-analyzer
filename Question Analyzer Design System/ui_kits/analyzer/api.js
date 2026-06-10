@@ -74,7 +74,7 @@
   // `input` is either a string of transcript text or a File (.json/.txt/.csv/.zip).
   // onProgress receives {stage, completed, total}; onStarted receives the job id
   // (use it with cancelJob).
-  async function analyze(input, { provider = 'ollama', threshold = 0.85 } = {}, onProgress, onStarted) {
+  async function analyze(input, { provider = 'ollama', threshold = 'auto' } = {}, onProgress, onStarted) {
     let response;
     if (input instanceof File) {
       const form = new FormData();
@@ -124,7 +124,8 @@
 
   // ---- Analysis settings (provider + threshold), persisted locally ----
   const SETTINGS_KEY = 'qa-analysis-settings';
-  const DEFAULT_SETTINGS = { provider: 'ollama', threshold: 0.85 };
+  // 'auto' threshold: model-aware default that self-adjusts when nothing groups
+  const DEFAULT_SETTINGS = { provider: 'ollama', threshold: 'auto' };
 
   function getSettings() {
     try {

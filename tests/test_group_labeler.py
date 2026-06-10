@@ -221,6 +221,9 @@ def make_analyzer(monkeypatch, vectors=VECTORS, **kwargs):
 
 def stub_llm(monkeypatch, analyzer, **methods):
     monkeypatch.setattr(analyzer.labeler, 'available', lambda: True)
+    # Default: LLM-first extraction "fails" so the regex fallback runs,
+    # keeping older tests' question sets unchanged
+    methods.setdefault('extract_questions', lambda texts: None)
     for name, fn in methods.items():
         monkeypatch.setattr(analyzer.labeler, name, fn)
 
@@ -266,6 +269,7 @@ def test_keyword_fallback_when_llm_fails(monkeypatch):
 
 
 def test_llm_detection_adds_missed_questions(monkeypatch):
+    monkeypatch.setenv('LLM_EXTRACTION', 'on')  # regex-first + missed-pass mode
     content = (
         "2024-01-05\nHow do I reset my password?\n"
         "-----------------------------------------------------------\n"
@@ -324,6 +328,24 @@ def test_full_extraction_falls_back_to_regex_on_llm_failure(monkeypatch):
 
     results = analyzer.analyze_slack_content(SAMPLE_CONTENT)
     assert results['total_questions'] == 3  # regex fallback kept everything
+
+
+def test_auto_mode_defaults_to_llm_extraction_for_small_transcripts(monkeypatch):
+    """Without any LLM_EXTRACTION setting, small transcripts get LLM-first."""
+    monkeypatch.delenv('LLM_EXTRACTION', raising=False)
+    vectors = {'does the agent come pre-installed?': [1.0, 0.0]}
+    analyzer = make_analyzer(monkeypatch, vectors=vectors, label_groups=True)
+    stub_llm(monkeypatch, analyzer,
+             label_group=lambda texts, keywords=None: None,
+             verify_same_topic=lambda a, b: None,
+             extract_questions=lambda texts: [
+                 {'index': 0, 'question': 'Does the agent come pre-installed?'}],
+             summarize_analysis=lambda groups, total: None)
+
+    results = analyzer.analyze_slack_content(
+        "2024-01-05\nHi Team, can I check if the agent comes pre-installed?\n")
+    assert results['total_questions'] == 1
+    assert results['ungrouped_questions'][0]['llm_extracted'] is True
 
 
 def test_answer_detection_counts_resolved_threads(monkeypatch):

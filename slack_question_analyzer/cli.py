@@ -99,8 +99,8 @@ def setup():
     env_content = [
         f"AI_PROVIDER={provider}",
         "",
-        "# Similarity threshold (0-1, higher = more strict grouping)",
-        "SIMILARITY_THRESHOLD=0.85",
+        "# Similarity threshold: unset = auto (recommended); a number pins it",
+        "# SIMILARITY_THRESHOLD=0.85",
         ""
     ]
 
