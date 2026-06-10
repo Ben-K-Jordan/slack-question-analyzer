@@ -58,6 +58,33 @@ def test_entries_never_match_across_embedding_models(tmp_path):
     assert same.match([1.0, 0.0], threshold=0.5) is not None
 
 
+def test_concurrent_bank_instances_merge_on_save(tmp_path):
+    """Two instances writing the same bank keep each other's topics."""
+    path = str(tmp_path / 'bank.json')
+    first = TopicBank(path=path, model='m')
+    second = TopicBank(path=path, model='m')  # loaded before first saves
+
+    first.record(make_group(topic='Virus Scanning'), [1.0, 0.0])
+    first.save()
+    second.record(make_group(topic='SFTP Connections'), [0.0, 1.0])
+    second.save()
+
+    reloaded = TopicBank(path=path, model='m')
+    names = {e['topic'] for e in reloaded.entries}
+    assert names == {'Virus Scanning', 'SFTP Connections'}
+
+
+def test_deleted_topics_stay_deleted_after_merge_on_save(tmp_path):
+    path = str(tmp_path / 'bank.json')
+    bank = TopicBank(path=path, model='m')
+    entry = bank.record(make_group(), [1.0, 0.0])
+    bank.save()
+
+    assert bank.delete(entry['id']) is True
+    bank.save()  # merge-on-save must not resurrect the tombstoned entry
+    assert TopicBank(path=path).entries == []
+
+
 def test_delete_and_merge(tmp_path):
     bank = TopicBank(path=str(tmp_path / 'bank.json'), model='m')
     keep = bank.record(make_group(topic='Virus Scanning', count=4), [1.0, 0.0])
