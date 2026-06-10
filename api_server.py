@@ -1,146 +1,328 @@
 """
 Flask API Server for Slack Question Analyzer
-Provides REST endpoints for the React frontend
+
+Serves both the REST API and the React dashboard, so the whole app runs
+with a single command:
+
+    python api_server.py        ->  http://localhost:5000
+
+Endpoints:
+    GET  /                      Dashboard UI
+    GET  /api/health            Health check (verifies Ollama when configured)
+    POST /api/analyze           Start an analysis job, returns {job_id}
+    GET  /api/jobs/<job_id>     Job status, real progress, and result
+    GET  /api/analyses          List of saved past analyses (newest first)
+    GET  /api/analyses/latest   Most recent saved analysis
+    GET  /api/analyses/<id>     A specific saved analysis
 """
 
-from flask import Flask, request, jsonify
-from flask_cors import CORS
 import os
-import sys
-from pathlib import Path
+import json
+import time
+import uuid
+import threading
 import traceback
+from pathlib import Path
 
-# Add src to path
-sys.path.append(str(Path(__file__).parent))
+import requests
+from flask import Flask, request, jsonify, send_from_directory, redirect
+from flask_cors import CORS
+from dotenv import load_dotenv
+
 from src.analyzer import QuestionAnalyzer
 
+load_dotenv()
+
+BASE_DIR = Path(__file__).parent
+UI_DIR = BASE_DIR / 'Question Analyzer Design System'
+ANALYSES_DIR = Path(os.getenv('ANALYSES_DIR', BASE_DIR / 'analyses'))
+
+VALID_PROVIDERS = ('ollama', 'azure', 'openai')
+MAX_CONTENT_MB = int(os.getenv('MAX_CONTENT_MB', '50'))
+JOB_RETENTION_SECONDS = 3600  # finished jobs are pruned after an hour
+
 app = Flask(__name__)
-CORS(app)  # Enable CORS for React frontend
+app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_MB * 1024 * 1024
+CORS(app)  # still allowed so the UI also works when opened via file://
+
+# ---------------------------------------------------------------------------
+# Job management
+# ---------------------------------------------------------------------------
+
+_jobs = {}
+_jobs_lock = threading.Lock()
+
+
+def _prune_jobs():
+    """Drop finished jobs older than the retention window (caller holds lock)."""
+    cutoff = time.time() - JOB_RETENTION_SECONDS
+    stale = [job_id for job_id, job in _jobs.items()
+             if job['status'] in ('done', 'error') and job['finished_at'] and job['finished_at'] < cutoff]
+    for job_id in stale:
+        del _jobs[job_id]
+
+
+def _run_analysis_job(job_id, content, provider, threshold):
+    """Worker thread: run the analysis, report progress, persist the result."""
+    def on_progress(stage, completed, total):
+        with _jobs_lock:
+            job = _jobs.get(job_id)
+            if job:
+                job['progress'] = {'stage': stage, 'completed': completed, 'total': total}
+
+    try:
+        analyzer = QuestionAnalyzer(provider=provider, threshold=threshold)
+        results = analyzer.analyze_slack_content(content, progress_callback=on_progress)
+        analysis_id = _save_analysis(results)
+        with _jobs_lock:
+            job = _jobs.get(job_id)
+            if job:
+                job.update(status='done', result=results, analysis_id=analysis_id,
+                           finished_at=time.time())
+    except Exception as e:
+        traceback.print_exc()
+        with _jobs_lock:
+            job = _jobs.get(job_id)
+            if job:
+                job.update(status='error', error=str(e), finished_at=time.time())
+
+
+# ---------------------------------------------------------------------------
+# Analysis history persistence
+# ---------------------------------------------------------------------------
+
+def _save_analysis(results):
+    """Persist a completed analysis to disk and return its id."""
+    ANALYSES_DIR.mkdir(parents=True, exist_ok=True)
+    analysis_id = time.strftime('%Y%m%d-%H%M%S') + '-' + uuid.uuid4().hex[:6]
+    path = ANALYSES_DIR / f"{analysis_id}.json"
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(results, f, ensure_ascii=False)
+    return analysis_id
+
+
+def _list_analyses():
+    """Summaries of saved analyses, newest first."""
+    if not ANALYSES_DIR.is_dir():
+        return []
+    summaries = []
+    for path in sorted(ANALYSES_DIR.glob('*.json'), reverse=True):
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            continue
+        top = data.get('groups') or []
+        summaries.append({
+            'id': path.stem,
+            'analyzed_at': data.get('metadata', {}).get('analyzed_at'),
+            'total_questions': data.get('total_questions', 0),
+            'total_groups': data.get('total_groups', 0),
+            'top_question': top[0]['representative_question'] if top else None,
+        })
+    return summaries
+
+
+def _load_analysis(analysis_id):
+    # Resolve strictly inside ANALYSES_DIR to block path traversal
+    path = (ANALYSES_DIR / f"{analysis_id}.json").resolve()
+    if path.parent != ANALYSES_DIR.resolve() or not path.is_file():
+        return None
+    with open(path, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+
+# ---------------------------------------------------------------------------
+# UI routes
+# ---------------------------------------------------------------------------
+
+@app.route('/')
+def index():
+    return redirect('/ui_kits/analyzer/index.html')
+
+
+@app.route('/<path:asset_path>')
+def ui_assets(asset_path):
+    """Serve the dashboard and design-system assets."""
+    return send_from_directory(UI_DIR, asset_path)
+
+
+# ---------------------------------------------------------------------------
+# API routes
+# ---------------------------------------------------------------------------
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    """Health check endpoint"""
-    return jsonify({'status': 'ok', 'message': 'API server is running'})
+    """Health check that verifies the configured provider is reachable."""
+    provider = os.getenv('AI_PROVIDER', 'ollama')
+    health = {'status': 'ok', 'provider': provider}
+
+    if provider == 'ollama':
+        ollama_url = os.getenv('OLLAMA_URL', 'http://localhost:11434').rstrip('/')
+        model = os.getenv('OLLAMA_MODEL', 'nomic-embed-text')
+        try:
+            response = requests.get(f"{ollama_url}/api/tags", timeout=3)
+            response.raise_for_status()
+            models = [m.get('name', '') for m in response.json().get('models', [])]
+            model_available = any(name == model or name.startswith(f"{model}:") for name in models)
+            health['ollama'] = {'reachable': True, 'model': model,
+                                'model_available': model_available}
+            if not model_available:
+                health['status'] = 'degraded'
+                health['message'] = (f"Ollama is running but model '{model}' is not "
+                                     f"pulled. Run: ollama pull {model}")
+        except requests.RequestException as e:
+            health['status'] = 'unavailable'
+            health['ollama'] = {'reachable': False, 'model': model, 'model_available': False}
+            health['message'] = (f"Cannot reach Ollama at {ollama_url} ({e.__class__.__name__}). "
+                                 "Start it with: ollama serve")
+
+    return jsonify(health)
+
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze_transcript():
     """
-    Analyze a Slack transcript
-    
+    Start an analysis job.
+
     Request body:
     {
         "content": "slack transcript text...",
-        "provider": "ollama",  # optional, defaults to ollama
-        "threshold": 0.85      # optional, defaults to 0.85
+        "provider": "ollama",  # optional, defaults to AI_PROVIDER or ollama
+        "threshold": 0.85      # optional
     }
-    
-    Returns:
-    {
-        "success": true,
-        "data": {
-            "total_questions": 49,
-            "total_groups": 12,
-            "groups": [...],
-            "ungrouped_questions": [...],
-            "metadata": {...}
-        }
-    }
+
+    Returns 202 with {"success": true, "job_id": "..."}; poll /api/jobs/<job_id>.
     """
-    try:
-        # Get request data
-        data = request.get_json()
-        
-        if not data or 'content' not in data:
-            return jsonify({
-                'success': False,
-                'error': 'Missing required field: content'
-            }), 400
-        
-        content = data['content']
-        provider = data.get('provider', 'ollama')
-        threshold = data.get('threshold', 0.85)
+    data = request.get_json(silent=True)
 
-        # Validate content
-        if not content or not content.strip():
-            return jsonify({
-                'success': False,
-                'error': 'Content cannot be empty'
-            }), 400
+    if not data or 'content' not in data:
+        return jsonify({'success': False, 'error': 'Missing required field: content'}), 400
 
-        if provider not in ('ollama', 'azure', 'openai'):
-            return jsonify({
-                'success': False,
-                'error': f"Invalid provider '{provider}'. Use 'ollama', 'azure', or 'openai'."
-            }), 400
+    content = data['content']
+    provider = data.get('provider') or os.getenv('AI_PROVIDER', 'ollama')
+    threshold = data.get('threshold', 0.85)
 
-        try:
-            threshold = float(threshold)
-        except (TypeError, ValueError):
-            return jsonify({
-                'success': False,
-                'error': 'threshold must be a number between 0 and 1'
-            }), 400
-        if not 0.0 <= threshold <= 1.0:
-            return jsonify({
-                'success': False,
-                'error': 'threshold must be between 0 and 1'
-            }), 400
+    if not isinstance(content, str) or not content.strip():
+        return jsonify({'success': False, 'error': 'Content cannot be empty'}), 400
 
-        # Apply the requested threshold (SimilarityAnalyzer reads it from env)
-        os.environ['SIMILARITY_THRESHOLD'] = str(threshold)
-
-        # Run analysis
-        analyzer = QuestionAnalyzer(provider=provider)
-        results = analyzer.analyze_slack_content(content)
-        
-        return jsonify({
-            'success': True,
-            'data': results
-        })
-        
-    except Exception as e:
-        print(f"Error during analysis: {str(e)}")
-        traceback.print_exc()
+    if provider not in VALID_PROVIDERS:
         return jsonify({
             'success': False,
-            'error': str(e),
-            'traceback': traceback.format_exc()
-        }), 500
+            'error': f"Invalid provider '{provider}'. Use 'ollama', 'azure', or 'openai'."
+        }), 400
+
+    try:
+        threshold = float(threshold)
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'threshold must be a number between 0 and 1'}), 400
+    if not 0.0 <= threshold <= 1.0:
+        return jsonify({'success': False, 'error': 'threshold must be between 0 and 1'}), 400
+
+    job_id = uuid.uuid4().hex
+    with _jobs_lock:
+        _prune_jobs()
+        _jobs[job_id] = {
+            'status': 'running',
+            'progress': {'stage': 'starting', 'completed': 0, 'total': 1},
+            'result': None,
+            'analysis_id': None,
+            'error': None,
+            'created_at': time.time(),
+            'finished_at': None,
+        }
+
+    thread = threading.Thread(target=_run_analysis_job,
+                              args=(job_id, content, provider, threshold),
+                              daemon=True)
+    thread.start()
+
+    return jsonify({'success': True, 'job_id': job_id}), 202
+
+
+@app.route('/api/jobs/<job_id>', methods=['GET'])
+def job_status(job_id):
+    """Status, progress, and (when done) result of an analysis job."""
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is None:
+            return jsonify({'success': False, 'error': 'Unknown job id'}), 404
+        payload = {
+            'success': True,
+            'status': job['status'],
+            'progress': job['progress'],
+        }
+        if job['status'] == 'done':
+            payload['data'] = job['result']
+            payload['analysis_id'] = job['analysis_id']
+        elif job['status'] == 'error':
+            payload['error'] = job['error']
+    return jsonify(payload)
+
+
+@app.route('/api/analyses', methods=['GET'])
+def list_analyses():
+    """List summaries of saved analyses, newest first."""
+    return jsonify({'success': True, 'analyses': _list_analyses()})
+
+
+@app.route('/api/analyses/latest', methods=['GET'])
+def latest_analysis():
+    """Full results of the most recent saved analysis."""
+    summaries = _list_analyses()
+    if not summaries:
+        return jsonify({'success': False, 'error': 'No saved analyses yet'}), 404
+    data = _load_analysis(summaries[0]['id'])
+    return jsonify({'success': True, 'id': summaries[0]['id'], 'data': data})
+
+
+@app.route('/api/analyses/<analysis_id>', methods=['GET'])
+def get_analysis(analysis_id):
+    """Full results of a specific saved analysis."""
+    data = _load_analysis(analysis_id)
+    if data is None:
+        return jsonify({'success': False, 'error': 'Analysis not found'}), 404
+    return jsonify({'success': True, 'id': analysis_id, 'data': data})
+
 
 @app.route('/api/config', methods=['GET'])
 def get_config():
     """Get current configuration"""
-    try:
-        from dotenv import load_dotenv
-        import os
-        
-        load_dotenv()
-        
-        return jsonify({
-            'success': True,
-            'config': {
-                'provider': os.getenv('AI_PROVIDER', 'ollama'),
-                'threshold': float(os.getenv('SIMILARITY_THRESHOLD', '0.85')),
-                'ollama_url': os.getenv('OLLAMA_URL', 'http://localhost:11434'),
-                'ollama_model': os.getenv('OLLAMA_MODEL', 'nomic-embed-text')
-            }
-        })
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+    return jsonify({
+        'success': True,
+        'config': {
+            'provider': os.getenv('AI_PROVIDER', 'ollama'),
+            'threshold': float(os.getenv('SIMILARITY_THRESHOLD', '0.85')),
+            'ollama_url': os.getenv('OLLAMA_URL', 'http://localhost:11434'),
+            'ollama_model': os.getenv('OLLAMA_MODEL', 'nomic-embed-text')
+        }
+    })
+
+
+@app.errorhandler(413)
+def payload_too_large(_e):
+    return jsonify({'success': False,
+                    'error': f'Transcript too large (limit: {MAX_CONTENT_MB}MB)'}), 413
+
+
+@app.errorhandler(500)
+def internal_error(_e):
+    # Details are logged server-side; don't leak tracebacks to clients
+    return jsonify({'success': False, 'error': 'Internal server error'}), 500
+
 
 if __name__ == '__main__':
+    host = os.getenv('API_HOST', '127.0.0.1')
+    port = int(os.getenv('API_PORT', '5000'))
+    debug = os.getenv('FLASK_DEBUG', '').lower() in ('1', 'true', 'on')
+
     print("=" * 60)
-    print("Slack Question Analyzer API Server")
+    print("Slack Question Analyzer")
     print("=" * 60)
-    print("Server running at: http://localhost:5000")
-    print("Health check: http://localhost:5000/api/health")
-    print("Analyze endpoint: POST http://localhost:5000/api/analyze")
+    print(f"Dashboard:    http://{host}:{port}/")
+    print(f"Health check: http://{host}:{port}/api/health")
+    print(f"API:          POST http://{host}:{port}/api/analyze")
     print("=" * 60)
     print("\nPress Ctrl+C to stop the server\n")
-    
-    app.run(debug=True, host='0.0.0.0', port=5000)
 
-# Made with Bob
+    app.run(debug=debug, host=host, port=port, threaded=True)

@@ -44,7 +44,6 @@ function UploadModal({ open, onClose, onImported }) {
   const [progress, setProgress] = React.useState(0);
   const [results, setResults] = React.useState(null);
   const [error, setError] = React.useState(null);
-  const timer = React.useRef(null);
 
   React.useEffect(() => {
     if (!open) {
@@ -53,66 +52,60 @@ function UploadModal({ open, onClose, onImported }) {
       setProgress(0);
       setResults(null);
       setError(null);
-      if (timer.current) clearInterval(timer.current);
     }
   }, [open]);
 
+  const steps = ['Parsing transcript', 'Extracting questions', 'Embedding & grouping', 'Ranking by frequency'];
+  const [activeStep, setActiveStep] = React.useState(0);
+
+  // Map backend progress events onto the step list and percent bar.
+  const onProgress = ({ stage, completed, total }) => {
+    if (stage === 'starting') { setActiveStep(0); setProgress(2); }
+    else if (stage === 'extracting') { setActiveStep(1); setProgress(completed ? 8 : 5); }
+    else if (stage === 'embedding') {
+      setActiveStep(2);
+      const share = total > 0 ? completed / total : 1;
+      setProgress(Math.round(10 + share * 75));
+    }
+    else if (stage === 'grouping') { setActiveStep(3); setProgress(90); }
+    else if (stage === 'keywords') { setActiveStep(3); setProgress(95); }
+    else if (stage === 'complete') { setActiveStep(3); setProgress(100); }
+  };
+
   const run = async () => {
     if (!file) return;
-    
+
     setPhase('running');
     setProgress(0);
+    setActiveStep(0);
     setError(null);
-    
+
     try {
-      // Read file content
-      const content = await file.text();
-      
-      // Simulate progress while API is working
-      let p = 0;
-      timer.current = setInterval(() => {
-        p += 2;
-        if (p < 90) setProgress(p);
-      }, 100);
-      
-      // Call backend API
-      const response = await fetch('http://localhost:5000/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content, provider: 'ollama', threshold: 0.85 })
+      // Fail fast with a clear message if the backend/Ollama isn't ready
+      const status = await window.QA_API.health().catch(() => {
+        throw new Error('Cannot reach the analyzer backend. Start it with: python api_server.py');
       });
-      
-      if (timer.current) clearInterval(timer.current);
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Analysis failed');
+      if (status.status !== 'ok') {
+        throw new Error(status.message || 'The analysis backend is not ready.');
       }
-      
-      const data = await response.json();
-      
-      if (!data.success) {
-        throw new Error(data.error || 'Analysis failed');
-      }
-      
+
+      const content = await file.text();
+      const data = await window.QA_API.analyze(content, { provider: 'ollama', threshold: 0.85 }, onProgress);
+
       setProgress(100);
-      setResults(data.data);
-      
+      setResults(data);
+
       // Store results globally for dashboard to use
-      window.ANALYSIS_RESULTS = data.data;
-      
+      window.ANALYSIS_RESULTS = data;
+
       setTimeout(() => setPhase('done'), 300);
-      
+
     } catch (err) {
-      if (timer.current) clearInterval(timer.current);
       setError(err.message);
       setPhase('error');
       console.error('Analysis error:', err);
     }
   };
-  
-  const steps = ['Parsing transcript', 'Extracting questions', 'Embedding & grouping', 'Ranking by frequency'];
-  const activeStep = Math.min(steps.length - 1, Math.floor(progress / 25));
 
   return (
     <Modal open={open} onClose={onClose} width={520}>

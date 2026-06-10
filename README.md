@@ -225,7 +225,8 @@ python -m src.cli analyze example_input.txt --threshold 0.95
 ## Web Dashboard
 
 A React dashboard (in `Question Analyzer Design System/ui_kits/analyzer/`) provides a visual
-front end on top of the same analysis engine.
+front end on top of the same analysis engine. The Flask server serves both the API **and**
+the dashboard, so the whole app runs with one command.
 
 ### Running the Full Stack
 
@@ -233,27 +234,47 @@ front end on top of the same analysis engine.
    ```bash
    ollama serve
    ```
-2. **Start the Flask API server** (`run_api_server.bat` on Windows, or):
+2. **Start the server** (`run_api_server.bat` on Windows, or):
    ```bash
    python api_server.py
    ```
-   The server runs at `http://localhost:5000`.
-3. **Open the UI** in your browser:
-   ```
-   Question Analyzer Design System/ui_kits/analyzer/index.html
-   ```
-   Upload a transcript via the upload modal; results appear in the dashboard.
+3. **Open the dashboard**: http://localhost:5000
+
+Upload a transcript via the upload modal. The progress bar reflects real backend progress
+(per-embedding), and completed analyses are saved to `analyses/` — the dashboard
+automatically reloads your most recent analysis after a page refresh.
+
+Server settings via environment variables: `API_HOST` (default `127.0.0.1`),
+`API_PORT` (default `5000`), `FLASK_DEBUG`, `MAX_CONTENT_MB` (default `50`),
+`ANALYSES_DIR` (default `analyses/`).
 
 ### API Endpoints
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/health` | GET | Health check |
-| `/api/analyze` | POST | Analyze a transcript. Body: `{"content": "...", "provider": "ollama", "threshold": 0.85}` |
+| `/api/health` | GET | Health check — also verifies Ollama is reachable and the model is pulled |
+| `/api/analyze` | POST | Start an analysis job. Body: `{"content": "...", "provider": "ollama", "threshold": 0.85}`. Returns `202` with `{"job_id": "..."}` |
+| `/api/jobs/<job_id>` | GET | Job status and progress; includes the full result when done |
+| `/api/analyses` | GET | List of saved past analyses (newest first) |
+| `/api/analyses/latest` | GET | Full results of the most recent analysis |
+| `/api/analyses/<id>` | GET | Full results of a specific analysis |
 | `/api/config` | GET | Current provider/threshold configuration |
 
-The `/api/analyze` response wraps the same JSON structure shown in [Output Format](#output-format)
-as `{"success": true, "data": {...}}`.
+A finished job's `data` field contains the same JSON structure shown in
+[Output Format](#output-format).
+
+Example:
+```bash
+# Start a job
+curl -X POST http://localhost:5000/api/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"content": "2026-06-05\nHow do I configure virus scanning?"}'
+# -> {"success": true, "job_id": "abc123..."}
+
+# Poll for progress / result
+curl http://localhost:5000/api/jobs/abc123...
+# -> {"status": "running", "progress": {"stage": "embedding", "completed": 12, "total": 49}}
+```
 
 ## Troubleshooting
 

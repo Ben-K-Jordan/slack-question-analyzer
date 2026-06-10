@@ -1,7 +1,20 @@
 // Overall dashboard — common questions, ranked by occurrences (all-time).
 function DashboardView() {
-  // Use real analysis results if available, otherwise fall back to mock data
-  const analysisResults = window.ANALYSIS_RESULTS;
+  // Use real analysis results when available; on first load, pull the most
+  // recent saved analysis from the backend so results survive page refreshes.
+  const [analysisResults, setAnalysisResults] = React.useState(window.ANALYSIS_RESULTS || null);
+  React.useEffect(() => {
+    if (analysisResults || !window.QA_API) return;
+    let cancelled = false;
+    window.QA_API.latestAnalysis().then((latest) => {
+      if (latest && !cancelled) {
+        window.ANALYSIS_RESULTS = latest;
+        setAnalysisResults(latest);
+      }
+    });
+    return () => { cancelled = true; };
+  }, []);
+
   const d = analysisResults ? transformAnalysisResults(analysisResults) : window.DASHBOARD_DATA;
   const [query, setQuery] = React.useState('');
   const max = d.groups && d.groups.length > 0 ? d.groups[0].count : 0;

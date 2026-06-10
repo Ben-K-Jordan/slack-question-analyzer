@@ -86,13 +86,15 @@ class SimilarityAnalyzer:
     REQUEST_TIMEOUT_SECONDS = 30
 
     def __init__(self, provider: Literal['azure', 'openai', 'ollama'] = 'ollama',
-                 use_disk_cache: bool = True):
+                 use_disk_cache: bool = True, threshold: Optional[float] = None):
         """
         Initialize the similarity analyzer.
 
         Args:
             provider: AI provider to use ('azure', 'openai', or 'ollama')
             use_disk_cache: Persist embeddings to disk so repeat runs are fast
+            threshold: Similarity threshold (0-1). Overrides the
+                       SIMILARITY_THRESHOLD env variable when given.
         """
         load_dotenv()
 
@@ -102,7 +104,12 @@ class SimilarityAnalyzer:
             )
 
         self.provider = provider
-        self.similarity_threshold = self._read_threshold()
+        if threshold is not None:
+            if not 0.0 <= threshold <= 1.0:
+                raise ValueError(f"threshold must be between 0 and 1, got {threshold}")
+            self.similarity_threshold = float(threshold)
+        else:
+            self.similarity_threshold = self._read_threshold()
 
         if provider == 'azure':
             # Azure OpenAI configuration
@@ -226,13 +233,15 @@ class SimilarityAnalyzer:
         self.embeddings_cache.save()
         return embedding
 
-    def _get_ollama_embeddings_parallel(self, texts: List[str], max_workers: int = 5):
+    def _get_ollama_embeddings_parallel(self, texts: List[str], max_workers: int = 5,
+                                        on_each=None):
         """
         Get embeddings from Ollama in parallel for better performance.
 
         Args:
             texts: List of texts to embed
             max_workers: Number of parallel requests (default: 5)
+            on_each: Optional callback invoked after each embedding completes
 
         Raises:
             EmbeddingError: If any embedding could not be retrieved
@@ -247,6 +256,8 @@ class SimilarityAnalyzer:
                     self.embeddings_cache.set(text, future.result())
                 except Exception as e:
                     errors.append((text, e))
+                if on_each:
+                    on_each()
 
         if errors:
             sample_text, sample_error = errors[0]
@@ -255,12 +266,14 @@ class SimilarityAnalyzer:
                 f"First failure ('{sample_text[:60]}...'): {sample_error}"
             )
 
-    def get_embeddings_batch(self, texts: List[str]) -> np.ndarray:
+    def get_embeddings_batch(self, texts: List[str], progress_callback=None) -> np.ndarray:
         """
         Get embeddings for multiple texts efficiently.
 
         Args:
             texts: List of texts to embed
+            progress_callback: Optional fn(completed, total) called as
+                               embeddings are fetched
 
         Returns:
             2D numpy array of embeddings
@@ -283,6 +296,18 @@ class SimilarityAnalyzer:
             print(f"Fetching {len(unique_uncached)} new embeddings "
                   f"({len(texts) - len(unique_uncached)} cached)...")
 
+        total = len(unique_uncached)
+        completed = 0
+
+        def report():
+            nonlocal completed
+            completed += 1
+            if progress_callback:
+                progress_callback(completed, total)
+
+        if progress_callback:
+            progress_callback(0, total)
+
         # Process in batches to avoid rate limits
         batch_size = 100 if self.provider != 'ollama' else 10  # Smaller batches for Ollama
 
@@ -291,10 +316,11 @@ class SimilarityAnalyzer:
 
             if self.provider == 'ollama':
                 # Ollama only supports one prompt per request; parallelize for speed
-                self._get_ollama_embeddings_parallel(batch)
+                self._get_ollama_embeddings_parallel(batch, on_each=report)
             else:
                 for text, embedding in zip(batch, self._openai_embeddings(batch)):
                     self.embeddings_cache.set(text, embedding)
+                    report()
 
         self.embeddings_cache.save()
 
@@ -322,12 +348,14 @@ class SimilarityAnalyzer:
         vec2 = np.array(embedding2).reshape(1, -1)
         return cosine_similarity(vec1, vec2)[0][0]
 
-    def group_similar_questions(self, questions: List[Dict]) -> List[Dict]:
+    def group_similar_questions(self, questions: List[Dict],
+                                progress_callback=None) -> List[Dict]:
         """
         Group similar questions together.
 
         Args:
             questions: List of question dictionaries with 'text' and 'normalized_text'
+            progress_callback: Optional fn(completed, total) for embedding progress
 
         Returns:
             List of question groups with representative questions
@@ -339,7 +367,7 @@ class SimilarityAnalyzer:
 
         # Get embeddings for all normalized questions
         texts = [q['normalized_text'] for q in questions]
-        embeddings = self.get_embeddings_batch(texts)
+        embeddings = self.get_embeddings_batch(texts, progress_callback=progress_callback)
 
         # Calculate similarity matrix
         similarity_matrix = cosine_similarity(embeddings)
