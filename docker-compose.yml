@@ -1,0 +1,32 @@
+# Full stack: the analyzer (API + dashboard) and a local Ollama.
+#
+#   docker compose up -d
+#   docker compose exec ollama ollama pull nomic-embed-text
+#   docker compose exec ollama ollama pull llama3.2   # optional, enables LLM features
+#
+# Dashboard: http://localhost:5000
+
+services:
+  analyzer:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      OLLAMA_URL: http://ollama:11434
+    volumes:
+      - analyses:/app/analyses
+      - embedding-cache:/app/.embedding_cache
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama
+    volumes:
+      - ollama-models:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  analyses:
+  embedding-cache:
+  ollama-models:

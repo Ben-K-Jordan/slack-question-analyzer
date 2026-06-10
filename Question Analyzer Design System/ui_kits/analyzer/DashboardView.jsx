@@ -1,14 +1,42 @@
 // Overall dashboard — common questions, ranked by occurrences (all-time).
 function DashboardView() {
-  // Use real analysis results if available, otherwise fall back to mock data
-  const analysisResults = window.ANALYSIS_RESULTS;
+  // Use real analysis results when available; on first load, pull the most
+  // recent saved analysis from the backend so results survive page refreshes.
+  const [analysisResults, setAnalysisResults] = React.useState(window.ANALYSIS_RESULTS || null);
+  React.useEffect(() => {
+    if (analysisResults || !window.QA_API) return;
+    let cancelled = false;
+    window.QA_API.latestAnalysis().then((latest) => {
+      if (latest && !cancelled) {
+        window.ANALYSIS_RESULTS = latest;
+        setAnalysisResults(latest);
+      }
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  const PAGE_SIZE = 50;
+  const isDemo = !analysisResults;
   const d = analysisResults ? transformAnalysisResults(analysisResults) : window.DASHBOARD_DATA;
   const [query, setQuery] = React.useState('');
+  const [visibleCount, setVisibleCount] = React.useState(PAGE_SIZE);
+  const [showUnique, setShowUnique] = React.useState(false);
+
+  const exportBtn = {
+    height: 32, padding: '0 12px', display: 'inline-flex', alignItems: 'center', gap: 6,
+    background: '#fff', color: 'var(--text-secondary)', border: '1px solid var(--border-strong)',
+    fontFamily: 'var(--font-sans)', fontSize: 12.5, cursor: 'pointer', whiteSpace: 'nowrap',
+  };
+  const download = (format) => {
+    if (window.ANALYSIS_ID) window.open(window.QA_API.exportUrl(window.ANALYSIS_ID, format), '_blank');
+  };
   const max = d.groups && d.groups.length > 0 ? d.groups[0].count : 0;
   const groups = d.groups ? d.groups.filter((g) =>
     g.question.toLowerCase().includes(query.toLowerCase()) ||
     g.keywords.join(' ').includes(query.toLowerCase()) ||
     (g.topic && g.topic.toLowerCase().includes(query.toLowerCase()))) : [];
+  const uniqueQuestions = (d.ungrouped || []).filter((q) =>
+    q.text.toLowerCase().includes(query.toLowerCase()));
 
   const stat = (label, value, accent) => (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -30,18 +58,33 @@ function DashboardView() {
         <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 24, flexWrap: 'wrap', marginBottom: 30 }}>
           <div>
             <h1 style={{ fontSize: 32, fontWeight: 300, letterSpacing: '-.02em', margin: '0 0 6px' }}>Most-asked questions</h1>
-            <div style={{ fontSize: 14, color: 'var(--text-secondary)' }}>All-time across your monitored Slack channels · ranked by occurrences</div>
+            <div style={{ fontSize: 14, color: 'var(--text-secondary)' }}>
+              All-time across your monitored Slack channels · ranked by occurrences
+              {isDemo ? <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 600, letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--purple-60)', background: 'var(--gray-10)', padding: '2px 8px' }}>Sample data</span> : null}
+            </div>
           </div>
-          <div style={search}>
-            <Icon name="search" size={16} color="var(--text-helper)" />
-            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter questions or topics"
-              style={{ border: 'none', outline: 'none', background: 'transparent', fontFamily: 'var(--font-sans)', fontSize: 14, width: '100%', color: 'var(--text-primary)' }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            {!isDemo && window.ANALYSIS_ID ? (
+              <React.Fragment>
+                <button style={exportBtn} title="Download Markdown report" onClick={() => download('md')}>
+                  <Icon name="download" size={14} /> Report
+                </button>
+                <button style={exportBtn} title="Download CSV" onClick={() => download('csv')}>
+                  <Icon name="download" size={14} /> CSV
+                </button>
+              </React.Fragment>
+            ) : null}
+            <div style={search}>
+              <Icon name="search" size={16} color="var(--text-helper)" />
+              <input value={query} onChange={(e) => { setQuery(e.target.value); setVisibleCount(PAGE_SIZE); }} placeholder="Filter questions or topics"
+                style={{ border: 'none', outline: 'none', background: 'transparent', fontFamily: 'var(--font-sans)', fontSize: 14, width: '100%', color: 'var(--text-primary)' }} />
+            </div>
           </div>
         </div>
       </Reveal>
 
       <Reveal delay={90}>
-        <div style={{ display: 'flex', gap: 56, padding: '22px 24px', background: 'var(--gray-10)', borderLeft: '3px solid var(--blue-60)', marginBottom: 32 }}>
+        <div style={{ display: 'flex', gap: 56, padding: '22px 24px', background: 'var(--gray-10)', borderLeft: '3px solid var(--blue-60)', marginBottom: d.executiveSummary ? 16 : 32 }}>
           {stat('Questions logged', d.totalQuestions)}
           {stat('Distinct topics', d.totalGroups, 'var(--purple-60)')}
           {stat('Answered', d.resolved, 'var(--teal-60)')}
@@ -52,6 +95,15 @@ function DashboardView() {
         </div>
       </Reveal>
 
+      {d.executiveSummary ? (
+        <Reveal delay={120}>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: '16px 24px', background: '#fff', border: '1px solid var(--border-subtle)', borderLeft: '3px solid var(--purple-60)', marginBottom: 32 }}>
+            <span style={{ color: 'var(--purple-60)', flex: '0 0 auto', marginTop: 1 }}><Icon name="sparkles" size={16} /></span>
+            <span style={{ fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.55 }}>{d.executiveSummary}</span>
+          </div>
+        </Reveal>
+      ) : null}
+
       <Reveal delay={160}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
           <span style={{ fontSize: 13, color: 'var(--text-helper)', fontWeight: 500 }}>Ranked · {groups.length} topics</span>
@@ -60,13 +112,41 @@ function DashboardView() {
       </Reveal>
 
       <div style={{ border: '1px solid var(--border-subtle)', borderBottom: 'none', background: '#fff' }}>
-        {groups.map((g, i) => (
+        {groups.slice(0, visibleCount).map((g, i) => (
           <RankedRow key={g.rank} rank={g.rank} index={i} question={g.question} count={g.count}
             maxCount={max} keywords={g.keywords} similarity={g.similarity} questions={g.questions}
-            defaultOpen={i === 0 && !query} />
+            topic={g.topic} summary={g.summary} defaultOpen={i === 0 && !query} />
         ))}
         {groups.length === 0 ? <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-helper)', borderBottom: '1px solid var(--border-subtle)' }}>No topics match “{query}”.</div> : null}
       </div>
+      {groups.length > visibleCount ? (
+        <button onClick={() => setVisibleCount((v) => v + PAGE_SIZE)}
+          style={{ display: 'block', width: '100%', padding: '13px 0', marginTop: -1, background: '#fff', border: '1px solid var(--border-subtle)', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 13, color: 'var(--blue-60)' }}>
+          Show {Math.min(PAGE_SIZE, groups.length - visibleCount)} more · {groups.length - visibleCount} remaining
+        </button>
+      ) : null}
+
+      {uniqueQuestions.length ? (
+        <div style={{ marginTop: 28 }}>
+          <button onClick={() => setShowUnique(!showUnique)}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)', padding: 0 }}>
+            <span style={{ display: 'inline-flex', transform: showUnique ? 'rotate(90deg)' : 'none', transition: 'transform var(--duration-base) var(--ease-productive)' }}>
+              <Icon name="chevron-right" size={14} />
+            </span>
+            Unique questions ({uniqueQuestions.length}) — asked only once
+          </button>
+          {showUnique ? (
+            <ul style={{ listStyle: 'none', margin: '12px 0 0', padding: 0, borderLeft: '1px solid var(--border-subtle)' }}>
+              {uniqueQuestions.map((q, i) => (
+                <li key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 16, padding: '8px 16px' }}>
+                  <span style={{ fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>{q.text}</span>
+                  {q.date && q.date !== 'Unknown' ? <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-placeholder)', whiteSpace: 'nowrap' }}>{q.date}</span> : null}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -76,16 +156,20 @@ window.DashboardView = DashboardView;
 function transformAnalysisResults(results) {
   if (!results || !results.groups) return window.DASHBOARD_DATA;
   
+  const fallbackTopic = (g) => g.representative_question.split(' ').slice(0, 3).join(' ') + '...';
   return {
     totalQuestions: results.total_questions || 0,
     totalGroups: results.total_groups || 0,
-    resolved: 0, // Not tracked yet
-    topTopic: results.groups[0] ? results.groups[0].representative_question.split(' ').slice(0, 3).join(' ') + '...' : 'N/A',
+    resolved: results.answered_questions || 0, // LLM answer detection (threads only)
+    executiveSummary: results.executive_summary || null,
+    ungrouped: results.ungrouped_questions || [],
+    topTopic: results.groups[0] ? (results.groups[0].topic || fallbackTopic(results.groups[0])) : 'N/A',
     groups: results.groups.map((g, i) => ({
       rank: i + 1,
       count: g.count,
       similarity: `${Math.round(g.avg_similarity * 100)}%`,
-      topic: g.representative_question.split(' ').slice(0, 3).join(' ') + '...',
+      topic: g.topic || null,
+      summary: g.summary || null,
       question: g.representative_question,
       keywords: g.keywords || [],
       questions: g.questions || []
