@@ -342,6 +342,20 @@ def health_check():
                                 'model_available': model_available,
                                 'label_model': label_model,
                                 'label_model_available': label_available}
+
+            # Structured output (format=<schema>) needs Ollama >= 0.5
+            try:
+                version = requests.get(f"{ollama_url}/api/version",
+                                       timeout=3).json().get('version', '')
+                health['ollama']['version'] = version
+                parts = [int(p) for p in version.split('.')[:2] if p.isdigit()]
+                if len(parts) == 2 and tuple(parts) < (0, 5):
+                    health['status'] = 'degraded'
+                    health['message'] = (f"Ollama {version} is too old for structured "
+                                         "output — update from https://ollama.com/download")
+            except (requests.RequestException, ValueError):
+                pass  # older Ollama without /api/version; treated as unknown
+
             if not model_available:
                 health['status'] = 'degraded'
                 health['message'] = (f"Ollama is running but model '{model}' is not "
@@ -408,6 +422,28 @@ def rename_topic(topic_id):
     if not bank.rename(topic_id, new_name):
         return jsonify({'success': False, 'error': 'Topic not found'}), 404
     return jsonify({'success': True, 'topic': new_name})
+
+
+@app.route('/api/topics/<topic_id>', methods=['DELETE'])
+def delete_topic(topic_id):
+    """Remove a junk topic from the learned bank."""
+    from slack_question_analyzer.topic_bank import TopicBank
+    if not TopicBank().delete(topic_id):
+        return jsonify({'success': False, 'error': 'Topic not found'}), 404
+    return jsonify({'success': True})
+
+
+@app.route('/api/topics/<topic_id>/merge', methods=['POST'])
+def merge_topic(topic_id):
+    """Merge this topic into another (body: {"into": "<target id>"})."""
+    from slack_question_analyzer.topic_bank import TopicBank
+    data = request.get_json(silent=True) or {}
+    target_id = str(data.get('into', '')).strip()
+    if not target_id:
+        return jsonify({'success': False, 'error': "Missing 'into' target topic id"}), 400
+    if not TopicBank().merge(topic_id, target_id):
+        return jsonify({'success': False, 'error': 'Topic not found (or merging into itself)'}), 404
+    return jsonify({'success': True})
 
 
 # ---------------------------------------------------------------------------
@@ -704,13 +740,33 @@ def internal_error(_e):
     return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
+def choose_port(host, preferred, attempts=5):
+    """
+    First free port starting at `preferred`. macOS reserves 5000 for AirPlay
+    and other apps collide too — falling back beats failing to start.
+    """
+    import socket
+    for offset in range(attempts):
+        port = preferred + offset
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                probe.bind((host, port))
+            if offset:
+                logger.warning("Port %d is in use; using %d instead", preferred, port)
+            return port
+        except OSError:
+            continue
+    return preferred  # let the server raise the real error
+
+
 if __name__ == '__main__':
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 
     host = os.getenv('API_HOST', '127.0.0.1')
-    port = int(os.getenv('API_PORT', '5000'))
+    port = choose_port(host, int(os.getenv('API_PORT', '5000')))
     debug = os.getenv('FLASK_DEBUG', '').lower() in ('1', 'true', 'on')
 
     # Re-queue any jobs that were interrupted by the last shutdown

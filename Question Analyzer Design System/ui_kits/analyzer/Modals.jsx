@@ -158,7 +158,10 @@ function UploadModal({ open, onClose, onImported }) {
                 </div>
               ))}
             </div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginTop: 18 }}>
+              <span style={{ fontSize: 11.5, color: 'var(--text-helper)', lineHeight: 1.4 }}>
+                First analysis warms up the AI models and can take a few minutes; repeat runs are much faster.
+              </span>
               <Button variant="ghost" icon={<Icon name="x" size={15} />} onClick={cancel}>Cancel analysis</Button>
             </div>
           </div>
@@ -297,6 +300,80 @@ function HistoryModal({ open, onClose, onLoad }) {
   );
 }
 
+// ---- Learned topics (the bank): rename, merge, delete ----
+function TopicsModal({ open, onClose }) {
+  const { Button } = window.QuestionAnalyzerDesignSystem_03a921;
+  const [topics, setTopics] = React.useState(null);
+  const [error, setError] = React.useState(null);
+
+  const load = React.useCallback(() => {
+    window.QA_API.listTopics().then(setTopics).catch((err) => setError(err.message));
+  }, []);
+  React.useEffect(() => { if (open) { setTopics(null); setError(null); load(); } }, [open, load]);
+
+  const act = async (fn) => {
+    try { await fn(); load(); } catch (err) { setError(err.message); }
+  };
+  const rename = (t) => {
+    const name = window.prompt('Rename this topic:', t.topic);
+    if (name && name.trim() && name.trim() !== t.topic) act(() => window.QA_API.renameTopic(t.id, name.trim()));
+  };
+  const remove = (t) => {
+    if (window.confirm(`Delete the topic "${t.topic}" from the learned bank?`)) act(() => window.QA_API.deleteTopic(t.id));
+  };
+  const merge = (t) => {
+    const name = window.prompt(`Merge "${t.topic}" into which topic? Type its exact name:`);
+    if (!name || !name.trim()) return;
+    const target = (topics || []).find((x) => x.topic && x.topic.toLowerCase() === name.trim().toLowerCase() && x.id !== t.id);
+    if (!target) { setError(`No other topic named "${name.trim()}"`); return; }
+    act(() => window.QA_API.mergeTopics(t.id, target.id));
+  };
+
+  const iconBtn = (title, name, onClick, color) => (
+    <button title={title} aria-label={title} onClick={onClick}
+      style={{ width: 26, height: 26, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-helper)' }}
+      onMouseEnter={(e) => { e.currentTarget.style.color = color; }}
+      onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-helper)'; }}>
+      <Icon name={name} size={14} />
+    </button>
+  );
+
+  return (
+    <Modal open={open} onClose={onClose} width={620}>
+      <ModalHead title="Learned topics" sub="Everything the analyzer knows from seeds and past analyses. Rename bad names, merge duplicates, delete junk — changes apply to all future analyses." onClose={onClose} />
+      <div style={{ padding: '0 24px 24px' }}>
+        {error ? <div style={{ fontSize: 13, color: 'var(--red-60)', padding: '12px 16px', background: 'var(--gray-10)', borderLeft: '3px solid var(--red-60)', marginBottom: 14 }}>{error}</div> : null}
+        {topics === null && !error ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--text-secondary)', fontSize: 13.5, padding: '18px 0' }}><Icon name="loader" size={16} /> Loading…</div>
+        ) : null}
+        {topics && topics.length === 0 ? (
+          <div style={{ textAlign: 'center', color: 'var(--text-helper)', fontSize: 13.5, padding: '26px 0 18px' }}>No learned topics yet — run an analysis first.</div>
+        ) : null}
+        {topics && topics.length > 0 ? (
+          <div style={{ border: '1px solid var(--border-subtle)', borderBottom: 'none', maxHeight: 400, overflowY: 'auto' }}>
+            {topics.map((t) => (
+              <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderBottom: '1px solid var(--border-subtle)', background: '#fff' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.topic || '(unnamed)'}</div>
+                  <div style={{ fontSize: 11.5, color: 'var(--text-helper)', fontFamily: 'var(--font-mono)' }}>
+                    {t.question_count || 0} questions · {t.analysis_count || 0} analyses{t.last_seen ? ` · last ${t.last_seen}` : ''}
+                  </div>
+                </div>
+                {iconBtn('Rename', 'pencil', () => rename(t), 'var(--blue-60)')}
+                {iconBtn('Merge into another topic', 'git-merge', () => merge(t), 'var(--purple-60)')}
+                {iconBtn('Delete', 'trash-2', () => remove(t), 'var(--red-60)')}
+              </div>
+            ))}
+          </div>
+        ) : null}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+          <Button variant="ghost" onClick={onClose}>Close</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // ---- Analysis settings (provider + similarity threshold) ----
 function SettingsModal({ open, onClose }) {
   const { Button, Slider } = window.QuestionAnalyzerDesignSystem_03a921;
@@ -356,4 +433,4 @@ function SettingsModal({ open, onClose }) {
   );
 }
 
-Object.assign(window, { UploadModal, HistoryModal, SettingsModal });
+Object.assign(window, { UploadModal, HistoryModal, TopicsModal, SettingsModal });

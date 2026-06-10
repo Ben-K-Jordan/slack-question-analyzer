@@ -24,10 +24,12 @@ logger = logging.getLogger(__name__)
 class TopicBank:
     """JSON-backed store of known topics with centroid matching."""
 
-    def __init__(self, path: Optional[str] = None, enabled: Optional[bool] = None):
+    def __init__(self, path: Optional[str] = None, enabled: Optional[bool] = None,
+                 model: Optional[str] = None):
         if enabled is None:
             enabled = os.getenv('TOPIC_BANK', 'on').lower() not in ('off', '0', 'false')
         self.enabled = enabled
+        self.model = model  # embedding model: entries only match their own model
         self.path = Path(path or os.getenv('TOPIC_BANK_PATH', 'topic_bank.json'))
         self.entries: List[Dict] = []
 
@@ -57,9 +59,13 @@ class TopicBank:
 
         best, best_sim = None, threshold
         for entry in self.entries:
+            # Entries from a different embedding model can share dimensions but
+            # live in a different space — never match across models
+            if self.model and entry.get('model') and entry['model'] != self.model:
+                continue
             v = self._unit(entry['centroid'])
             if v is None or v.shape != c.shape:
-                continue  # embedding model changed; old entries can't match
+                continue  # dimension mismatch (legacy entries without a model stamp)
             sim = float(c @ v)
             if sim >= best_sim:
                 best, best_sim = entry, sim
@@ -88,6 +94,7 @@ class TopicBank:
 
         entry = {
             'id': uuid.uuid4().hex,
+            'model': self.model,
             'topic': group.get('topic'),
             'summary': group.get('summary'),
             'representative_question': group['representative_question'],
@@ -101,14 +108,53 @@ class TopicBank:
         self.entries.append(entry)
         return entry
 
+    def _find(self, topic_id: str) -> Optional[Dict]:
+        return next((e for e in self.entries if e.get('id') == topic_id), None)
+
     def rename(self, topic_id: str, new_name: str) -> bool:
         """Rename a topic (the fix for a bad name sticking forever)."""
-        for entry in self.entries:
-            if entry.get('id') == topic_id:
-                entry['topic'] = new_name
-                self.save()
-                return True
-        return False
+        entry = self._find(topic_id)
+        if entry is None:
+            return False
+        entry['topic'] = new_name
+        self.save()
+        return True
+
+    def delete(self, topic_id: str) -> bool:
+        """Remove a junk topic from the bank."""
+        entry = self._find(topic_id)
+        if entry is None:
+            return False
+        self.entries.remove(entry)
+        self.save()
+        return True
+
+    def merge(self, source_id: str, target_id: str) -> bool:
+        """
+        Merge one topic into another: the target keeps its name; counts add
+        up and the centroid becomes the weighted blend. The source is removed.
+        """
+        source = self._find(source_id)
+        target = self._find(target_id)
+        if source is None or target is None or source is target:
+            return False
+
+        s_n = source.get('question_count', 1)
+        t_n = target.get('question_count', 1)
+        s_v = self._unit(source['centroid'])
+        t_v = self._unit(target['centroid'])
+        if s_v is not None and t_v is not None and s_v.shape == t_v.shape:
+            blended = self._unit(t_v * t_n + s_v * s_n)
+            if blended is not None:
+                target['centroid'] = [round(float(x), 6) for x in blended]
+        target['question_count'] = t_n + s_n
+        target['analysis_count'] = (target.get('analysis_count', 1)
+                                    + source.get('analysis_count', 0))
+        target['last_seen'] = max(target.get('last_seen') or '',
+                                  source.get('last_seen') or '') or target.get('last_seen')
+        self.entries.remove(source)
+        self.save()
+        return True
 
     def save(self):
         """Persist the bank (atomic write; best-effort)."""

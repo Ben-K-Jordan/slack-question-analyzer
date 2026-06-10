@@ -203,30 +203,70 @@ class QuestionExtractor:
         if not isinstance(data, list):
             return None
 
-        items = [item for item in data
-                 if isinstance(item, dict) and isinstance(item.get('text'), str) and item['text']]
+        # Modern Slack exports often leave 'text' empty and put the real
+        # content in rich-text 'blocks' — read both
+        items = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            text = item.get('text')
+            if not isinstance(text, str) or not text.strip():
+                text = self._text_from_blocks(item.get('blocks'))
+            if text and text.strip():
+                items.append((text, item))
 
         # Split into thread parents and replies
         replies_by_parent: Dict[str, List[str]] = {}
         parents = []
-        for item in items:
+        for text, item in items:
             ts = item.get('ts')
             thread_ts = item.get('thread_ts')
             if thread_ts and ts and thread_ts != ts:
                 replies_by_parent.setdefault(thread_ts, []).append(
-                    self.clean_slack_markup(item['text'])[:300])
+                    self.clean_slack_markup(text)[:300])
             else:
-                parents.append(item)
+                parents.append((text, item))
 
         messages = []
-        for item in parents:
+        for text, item in parents:
             date = item.get('date') or self._slack_ts_to_date(item.get('ts'))
-            message = {'text': item['text'], 'date': date}
+            message = {'text': text, 'date': date}
             replies = replies_by_parent.get(item.get('ts'), [])
             if replies:
                 message['replies'] = replies[:5]
             messages.append(message)
         return messages
+
+    @staticmethod
+    def _text_from_blocks(blocks) -> str:
+        """
+        Extract plain text from Slack rich-text 'blocks'. Preformatted blocks
+        (code/logs) are skipped, matching how fenced code is stripped from
+        plain text.
+        """
+        if not isinstance(blocks, list):
+            return ''
+        parts = []
+
+        def walk(elements):
+            for element in elements or []:
+                if not isinstance(element, dict):
+                    continue
+                etype = element.get('type')
+                if etype == 'rich_text_preformatted':
+                    continue
+                if etype == 'text' and isinstance(element.get('text'), str):
+                    parts.append(element['text'])
+                elif etype == 'link':
+                    parts.append(element.get('text') or '')
+                elif etype in ('rich_text_section', 'rich_text_quote',
+                               'rich_text_list', 'rich_text'):
+                    walk(element.get('elements'))
+
+        for block in blocks:
+            if isinstance(block, dict) and block.get('type') == 'rich_text':
+                walk(block.get('elements'))
+        return ''.join(parts).strip()
 
     _CSV_TEXT_COLUMNS = ('text', 'message', 'question', 'content', 'body')
     _CSV_DATE_COLUMNS = ('date', 'ts', 'timestamp', 'time', 'datetime')

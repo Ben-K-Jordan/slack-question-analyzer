@@ -81,6 +81,30 @@ def test_label_group_uses_chat_with_schema_and_few_shot(monkeypatch):
     assert 'Never use vague topics' in body['messages'][0]['content']
 
 
+def test_extraction_prompt_has_few_shot_and_long_excerpts(monkeypatch):
+    captured = []
+    patch_chat(monkeypatch, [json.dumps({'questions': []})], captured)
+    long_message = 'x' * 500 + ' how do I fix this?'
+    GroupLabeler('ollama').extract_questions([long_message])
+
+    user_msg = captured[0]['body']['messages'][1]['content']
+    assert 'Example messages:' in user_msg          # few-shot present
+    assert 'bulk-disable' in user_msg               # the worked example
+    assert 'x' * 500 in user_msg                    # 600-char excerpts, not 300
+    assert captured[0]['body']['options']['num_predict'] == 800
+
+
+def test_domain_context_injected_into_prompts(monkeypatch):
+    monkeypatch.setenv('DOMAIN_CONTEXT', 'a webMethods MFT support channel')
+    captured = []
+    patch_chat(monkeypatch,
+               ['{"topic": "Virus Scanning", "summary": "s"}'], captured)
+    GroupLabeler('ollama').label_group(['How do I scan files?'])
+
+    system = captured[0]['body']['messages'][0]['content']
+    assert 'webMethods MFT support channel' in system
+
+
 def test_label_group_retries_generic_topic_with_feedback(monkeypatch):
     captured = []
     patch_chat(monkeypatch,
