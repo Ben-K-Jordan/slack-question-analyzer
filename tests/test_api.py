@@ -1,6 +1,5 @@
 """Tests for the Flask API server: jobs, history, health, and validation."""
 
-import json
 import time
 
 import numpy as np

@@ -207,32 +207,6 @@ class SimilarityAnalyzer:
 
         return self._with_retries(call, f"{self.provider} embeddings request")
 
-    def get_embedding(self, text: str) -> List[float]:
-        """
-        Get embedding vector for text.
-
-        Args:
-            text: Text to embed
-
-        Returns:
-            Embedding vector as list of floats
-
-        Raises:
-            EmbeddingError: If the embedding could not be retrieved
-        """
-        cached = self.embeddings_cache.get(text)
-        if cached is not None:
-            return cached
-
-        if self.provider == 'ollama':
-            embedding = self._ollama_embedding(text)
-        else:
-            embedding = self._openai_embeddings([text])[0]
-
-        self.embeddings_cache.set(text, embedding)
-        self.embeddings_cache.save()
-        return embedding
-
     def _get_ollama_embeddings_parallel(self, texts: List[str], max_workers: int = 5,
                                         on_each=None):
         """
@@ -332,21 +306,6 @@ class SimilarityAnalyzer:
             embeddings.append(embedding)
 
         return np.array(embeddings)
-
-    def calculate_similarity(self, embedding1: List[float], embedding2: List[float]) -> float:
-        """
-        Calculate cosine similarity between two embeddings.
-
-        Args:
-            embedding1: First embedding vector
-            embedding2: Second embedding vector
-
-        Returns:
-            Similarity score between 0 and 1
-        """
-        vec1 = np.array(embedding1).reshape(1, -1)
-        vec2 = np.array(embedding2).reshape(1, -1)
-        return cosine_similarity(vec1, vec2)[0][0]
 
     @staticmethod
     def _lexical_similarity(text1: str, text2: str) -> float:
