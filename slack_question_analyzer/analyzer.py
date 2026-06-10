@@ -343,11 +343,15 @@ class QuestionAnalyzer:
         """
         candidates = [g for g in groups if g['count'] > 1][:MAX_LABELED_GROUPS]
 
-        # Pass 1: the bank labels topics it has seen before
-        bank = TopicBank()
+        # Pass 1: the bank labels topics it has seen before. Bank matching has
+        # its own strict floor: auto-threshold may relax grouping, but a loose
+        # match inheriting a curated name would be worse than no name.
+        bank = TopicBank(model=self.similarity_analyzer.embedding_model)
         bank_matches = {}  # id(group) -> (centroid, matched entry or None)
+        labeled_by = {}    # id(group) -> 'bank' | 'llm' | 'keywords'
         if bank.enabled:
-            threshold = self.similarity_analyzer.similarity_threshold
+            threshold = max(self.similarity_analyzer.similarity_threshold,
+                            float(os.getenv('BANK_MATCH_THRESHOLD', '0.8')))
             for group in candidates:
                 centroid = self._group_centroid(group)
                 matched = bank.match(centroid, threshold)
@@ -355,6 +359,7 @@ class QuestionAnalyzer:
                 if matched and matched.get('topic'):
                     group['topic'] = matched['topic']
                     group['summary'] = matched.get('summary')
+                    labeled_by[id(group)] = 'bank'
             known = sum(1 for _, m in bank_matches.values() if m)
             if known:
                 logger.info("Topic bank recognized %d of %d group(s)",
@@ -373,6 +378,7 @@ class QuestionAnalyzer:
                 if label:
                     group['topic'] = label['topic']
                     group['summary'] = label['summary']
+                    labeled_by[id(group)] = 'llm'
                 report('labeling', i, len(unlabeled))
 
         # Keyword fallback for anything the LLM didn't (or couldn't) label
@@ -381,10 +387,14 @@ class QuestionAnalyzer:
                 group['topic'] = self._keyword_topic(group)
                 group['summary'] = None
 
-        # Pass 3: teach the bank what this analysis saw
+        # Pass 3: teach the bank — but only quality names. Keyword-fallback
+        # topics are never banked: a junk name that sticks is worse than
+        # relabeling next time.
         if bank.enabled:
             for group in candidates:
                 centroid, matched = bank_matches.get(id(group), (None, None))
+                if matched is None and labeled_by.get(id(group)) != 'llm':
+                    continue
                 entry = bank.record(group, centroid, matched)
                 if entry:
                     group['seen_in_analyses'] = entry['analysis_count']
@@ -397,7 +407,7 @@ class QuestionAnalyzer:
         {topic, question} pairs). Embeddings are computed locally on first
         use and cached; failures are non-fatal (the bank just starts empty).
         """
-        bank = TopicBank()
+        bank = TopicBank(model=self.similarity_analyzer.embedding_model)
         if not bank.enabled or bank.entries:
             return
         seed_path = Path(os.getenv('SEED_TOPICS_PATH', 'seed_topics.json'))

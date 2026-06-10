@@ -49,6 +49,15 @@ seems off, `slack-analyzer doctor` checks the whole setup and prints exact fixes
 Prefer containers? `docker compose up -d` runs everything **including** the model
 downloads — then open http://localhost:5000.
 
+**Tips for a smooth start:**
+- Get the code with `git clone` rather than downloading a zip — Windows marks zip
+  contents with a security flag that makes SmartScreen warn on the setup scripts
+  (if you did use a zip: right-click each `.bat`/`.ps1` → Properties → Unblock).
+- If port 5000 is taken (macOS reserves it for AirPlay), the server picks the next
+  free port automatically and prints the URL.
+- Set `DOMAIN_CONTEXT` in `.env` (e.g. `a webMethods MFT support Slack channel`) —
+  it's injected into every AI prompt and makes topic names noticeably sharper.
+
 ## Installation
 
 ### Prerequisites
