@@ -1,6 +1,6 @@
 // App header: brand, animated Dashboard | Week in Review toggle,
 // Upload transcript, and the account / sign-in avatar.
-function AppHeader({ view, setView, onUpload, onHistory, onTopics, onSettings }) {
+function AppHeader({ view, setView, onUpload, onHistory, onTopics, onSettings, version }) {
   const segs = [{ key: 'dashboard', label: 'Dashboard' }, { key: 'week', label: 'Week in Review' }];
   const activeIdx = segs.findIndex((s) => s.key === view);
 
@@ -38,6 +38,12 @@ function AppHeader({ view, setView, onUpload, onHistory, onTopics, onSettings })
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        {version ? (
+          <span title="Backend version — if this doesn't match what you just pulled, restart the server and hard-refresh (Ctrl+F5)"
+            style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--gray-50)' }}>
+            v{version}
+          </span>
+        ) : null}
         <button onClick={onUpload} style={{
           height: 32, padding: '0 14px', display: 'inline-flex', alignItems: 'center', gap: 8,
           background: 'transparent', color: '#fff', border: '1px solid var(--gray-70)',
