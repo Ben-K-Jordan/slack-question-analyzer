@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).parent
 UI_DIR = BASE_DIR / 'Question Analyzer Design System'
 ANALYSES_DIR = Path(os.getenv('ANALYSES_DIR', BASE_DIR / 'analyses'))
+JOBS_DIR = Path(os.getenv('JOBS_DIR', BASE_DIR / 'jobs'))
 
 VALID_PROVIDERS = ('ollama', 'azure', 'openai')
 MAX_CONTENT_MB = int(os.getenv('MAX_CONTENT_MB', '50'))
@@ -52,53 +53,203 @@ CORS(app)  # still allowed so the UI also works when opened via file://
 
 # ---------------------------------------------------------------------------
 # Job management
+#
+# Jobs run in worker threads, queued behind a semaphore. Job metadata and the
+# uploaded content are persisted under JOBS_DIR so that interrupted jobs can
+# be re-queued after a server restart (see recover_interrupted_jobs).
 # ---------------------------------------------------------------------------
 
 _jobs = {}
 _jobs_lock = threading.Lock()
 _job_slots = threading.Semaphore(MAX_CONCURRENT_JOBS)
 
+FINAL_STATUSES = ('done', 'error', 'cancelled')
+
+
+class JobCancelled(Exception):
+    """Raised inside a worker when the user cancels the job."""
+
+
+def _job_meta_path(job_id):
+    return JOBS_DIR / f"{job_id}.json"
+
+
+def _job_content_path(job_id):
+    return JOBS_DIR / f"{job_id}.content.json"
+
+
+def _persist_job(job_id):
+    """Write job metadata to disk (caller holds the lock). Best-effort."""
+    job = _jobs.get(job_id)
+    if job is None:
+        return
+    meta = {key: job.get(key) for key in
+            ('status', 'analysis_id', 'error', 'created_at', 'finished_at',
+             'provider', 'threshold')}
+    try:
+        JOBS_DIR.mkdir(parents=True, exist_ok=True)
+        with open(_job_meta_path(job_id), 'w', encoding='utf-8') as f:
+            json.dump(meta, f)
+    except OSError as e:
+        logger.warning("Could not persist job %s: %s", job_id, e)
+
+
+def _cleanup_job_files(job_id, meta_too=False):
+    for path in ([_job_content_path(job_id), _job_meta_path(job_id)] if meta_too
+                 else [_job_content_path(job_id)]):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
 
 def _prune_jobs():
     """Drop finished jobs older than the retention window (caller holds lock)."""
     cutoff = time.time() - JOB_RETENTION_SECONDS
     stale = [job_id for job_id, job in _jobs.items()
-             if job['status'] in ('done', 'error') and job['finished_at'] and job['finished_at'] < cutoff]
+             if job['status'] in FINAL_STATUSES and job['finished_at'] and job['finished_at'] < cutoff]
     for job_id in stale:
         del _jobs[job_id]
+        _cleanup_job_files(job_id, meta_too=True)
 
 
-def _run_analysis_job(job_id, content, provider, threshold):
+def _start_job(contents, provider, threshold):
+    """Register and launch an analysis job; returns the job id."""
+    job_id = uuid.uuid4().hex
+    with _jobs_lock:
+        _prune_jobs()
+        _jobs[job_id] = {
+            'status': 'queued',
+            'progress': {'stage': 'queued', 'completed': 0, 'total': 1},
+            'result': None,
+            'analysis_id': None,
+            'error': None,
+            'cancelled': False,
+            'provider': provider,
+            'threshold': threshold,
+            'created_at': time.time(),
+            'finished_at': None,
+        }
+        _persist_job(job_id)
+
+    # Persist the content so the job survives a server restart
+    try:
+        JOBS_DIR.mkdir(parents=True, exist_ok=True)
+        with open(_job_content_path(job_id), 'w', encoding='utf-8') as f:
+            json.dump(contents, f, ensure_ascii=False)
+    except OSError as e:
+        logger.warning("Could not persist job content for %s: %s", job_id, e)
+
+    thread = threading.Thread(target=_run_analysis_job,
+                              args=(job_id, contents, provider, threshold),
+                              daemon=True)
+    thread.start()
+    return job_id
+
+
+def _finish_job(job_id, **fields):
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job:
+            job.update(finished_at=time.time(), **fields)
+            _persist_job(job_id)
+    _cleanup_job_files(job_id)
+
+
+def _run_analysis_job(job_id, contents, provider, threshold):
     """Worker thread: run the analysis, report progress, persist the result."""
     def on_progress(stage, completed, total):
         with _jobs_lock:
             job = _jobs.get(job_id)
             if job:
+                if job['cancelled']:
+                    raise JobCancelled()
                 job['progress'] = {'stage': stage, 'completed': completed, 'total': total}
 
     # Queue behind any running analysis so a local Ollama isn't overloaded
     with _job_slots:
         with _jobs_lock:
             job = _jobs.get(job_id)
-            if job:
-                job['status'] = 'running'
-                job['progress'] = {'stage': 'starting', 'completed': 0, 'total': 1}
+            if job is None:
+                return
+            if job['cancelled']:
+                job.update(status='cancelled', finished_at=time.time())
+                _persist_job(job_id)
+                _cleanup_job_files(job_id)
+                return
+            job['status'] = 'running'
+            job['progress'] = {'stage': 'starting', 'completed': 0, 'total': 1}
+            _persist_job(job_id)
 
         try:
             analyzer = QuestionAnalyzer(provider=provider, threshold=threshold)
-            results = analyzer.analyze_slack_content(content, progress_callback=on_progress)
+            results = analyzer.analyze_contents(contents, progress_callback=on_progress)
             analysis_id = _save_analysis(results)
-            with _jobs_lock:
-                job = _jobs.get(job_id)
-                if job:
-                    job.update(status='done', result=results, analysis_id=analysis_id,
-                               finished_at=time.time())
+            _finish_job(job_id, status='done', result=results, analysis_id=analysis_id)
+        except JobCancelled:
+            logger.info("Analysis job %s cancelled", job_id)
+            _finish_job(job_id, status='cancelled')
         except Exception as e:
             logger.exception("Analysis job %s failed", job_id)
-            with _jobs_lock:
-                job = _jobs.get(job_id)
-                if job:
-                    job.update(status='error', error=str(e), finished_at=time.time())
+            _finish_job(job_id, status='error', error=str(e))
+
+
+def recover_interrupted_jobs():
+    """
+    Re-queue jobs that were queued/running when the server last stopped.
+    Called at server startup. Returns the number of re-queued jobs.
+    """
+    if not JOBS_DIR.is_dir():
+        return 0
+
+    recovered = 0
+    for meta_path in JOBS_DIR.glob('*.json'):
+        if meta_path.stem.endswith('.content'):
+            continue
+        job_id = meta_path.stem
+        try:
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            continue
+        if meta.get('status') not in ('queued', 'running'):
+            continue
+
+        content_path = _job_content_path(job_id)
+        try:
+            with open(content_path, 'r', encoding='utf-8') as f:
+                contents = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            meta.update(status='error', finished_at=time.time(),
+                        error='Server restarted and the uploaded content was lost; please re-run.')
+            with open(meta_path, 'w', encoding='utf-8') as f:
+                json.dump(meta, f)
+            continue
+
+        provider = meta.get('provider') or os.getenv('AI_PROVIDER', 'ollama')
+        threshold = meta.get('threshold', 0.85)
+        with _jobs_lock:
+            _jobs[job_id] = {
+                'status': 'queued',
+                'progress': {'stage': 'queued', 'completed': 0, 'total': 1},
+                'result': None,
+                'analysis_id': None,
+                'error': None,
+                'cancelled': False,
+                'provider': provider,
+                'threshold': threshold,
+                'created_at': meta.get('created_at') or time.time(),
+                'finished_at': None,
+            }
+            _persist_job(job_id)
+        threading.Thread(target=_run_analysis_job,
+                         args=(job_id, contents, provider, threshold),
+                         daemon=True).start()
+        recovered += 1
+
+    if recovered:
+        logger.info("Re-queued %d interrupted job(s) after restart", recovered)
+    return recovered
 
 
 # ---------------------------------------------------------------------------
@@ -212,30 +363,85 @@ def health_check():
     return jsonify(health)
 
 
+TEXT_EXTENSIONS = ('.json', '.txt', '.csv')
+
+
+def _contents_from_zip(raw_bytes):
+    """Extract text contents from a zipped Slack export (zip-bomb guarded)."""
+    import io
+    import zipfile
+
+    limit = MAX_CONTENT_MB * 1024 * 1024
+    total = 0
+    contents = []
+    with zipfile.ZipFile(io.BytesIO(raw_bytes)) as archive:
+        for info in archive.infolist():
+            if info.is_dir():
+                continue
+            name = info.filename
+            base = name.rsplit('/', 1)[-1]
+            if name.startswith('__MACOSX') or base.startswith('.'):
+                continue
+            if not base.lower().endswith(TEXT_EXTENSIONS):
+                continue
+            total += info.file_size
+            if total > limit:
+                raise ValueError(f'Zip contents exceed the {MAX_CONTENT_MB}MB limit')
+            contents.append(archive.read(info).decode('utf-8', errors='replace'))
+    if not contents:
+        raise ValueError('Zip contains no .json, .txt, or .csv files')
+    return contents
+
+
+def _contents_from_upload():
+    """Contents from a multipart upload: plain files and/or .zip archives."""
+    files = request.files.getlist('files')
+    if not files and 'file' in request.files:
+        files = [request.files['file']]
+    if not files:
+        raise ValueError('No files uploaded (use the "files" field)')
+
+    contents = []
+    for storage in files:
+        raw = storage.read()
+        if (storage.filename or '').lower().endswith('.zip'):
+            contents.extend(_contents_from_zip(raw))
+        else:
+            contents.append(raw.decode('utf-8', errors='replace'))
+    return contents
+
+
 @app.route('/api/analyze', methods=['POST'])
 def analyze_transcript():
     """
-    Start an analysis job.
+    Start an analysis job. Two request shapes are accepted:
 
-    Request body:
-    {
-        "content": "slack transcript text...",
-        "provider": "ollama",  # optional, defaults to AI_PROVIDER or ollama
-        "threshold": 0.85      # optional
-    }
+    JSON:       {"content": "...", "provider": "ollama", "threshold": 0.85}
+    Multipart:  files=<one or more .json/.txt/.csv/.zip files>,
+                provider=..., threshold=...   (zips are unpacked server-side)
 
     Returns 202 with {"success": true, "job_id": "..."}; poll /api/jobs/<job_id>.
     """
-    data = request.get_json(silent=True)
+    import zipfile
 
-    if not data or 'content' not in data:
-        return jsonify({'success': False, 'error': 'Missing required field: content'}), 400
+    if request.content_type and 'multipart/form-data' in request.content_type:
+        provider = request.form.get('provider') or os.getenv('AI_PROVIDER', 'ollama')
+        threshold = request.form.get('threshold', 0.85)
+        try:
+            contents = _contents_from_upload()
+        except (ValueError, zipfile.BadZipFile) as e:
+            return jsonify({'success': False, 'error': str(e)}), 400
+    else:
+        data = request.get_json(silent=True)
+        if not data or 'content' not in data:
+            return jsonify({'success': False, 'error': 'Missing required field: content'}), 400
+        if not isinstance(data['content'], str):
+            return jsonify({'success': False, 'error': 'Content cannot be empty'}), 400
+        contents = [data['content']]
+        provider = data.get('provider') or os.getenv('AI_PROVIDER', 'ollama')
+        threshold = data.get('threshold', 0.85)
 
-    content = data['content']
-    provider = data.get('provider') or os.getenv('AI_PROVIDER', 'ollama')
-    threshold = data.get('threshold', 0.85)
-
-    if not isinstance(content, str) or not content.strip():
+    if not any(c.strip() for c in contents):
         return jsonify({'success': False, 'error': 'Content cannot be empty'}), 400
 
     if provider not in VALID_PROVIDERS:
@@ -251,25 +457,20 @@ def analyze_transcript():
     if not 0.0 <= threshold <= 1.0:
         return jsonify({'success': False, 'error': 'threshold must be between 0 and 1'}), 400
 
-    job_id = uuid.uuid4().hex
-    with _jobs_lock:
-        _prune_jobs()
-        _jobs[job_id] = {
-            'status': 'queued',
-            'progress': {'stage': 'queued', 'completed': 0, 'total': 1},
-            'result': None,
-            'analysis_id': None,
-            'error': None,
-            'created_at': time.time(),
-            'finished_at': None,
-        }
-
-    thread = threading.Thread(target=_run_analysis_job,
-                              args=(job_id, content, provider, threshold),
-                              daemon=True)
-    thread.start()
-
+    job_id = _start_job(contents, provider, threshold)
     return jsonify({'success': True, 'job_id': job_id}), 202
+
+
+@app.route('/api/jobs/<job_id>/cancel', methods=['POST'])
+def cancel_job(job_id):
+    """Request cancellation of a queued or running job."""
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is None:
+            return jsonify({'success': False, 'error': 'Unknown job id'}), 404
+        if job['status'] not in FINAL_STATUSES:
+            job['cancelled'] = True
+        return jsonify({'success': True, 'status': job['status']})
 
 
 @app.route('/api/jobs/<job_id>', methods=['GET'])
@@ -278,7 +479,7 @@ def job_status(job_id):
     with _jobs_lock:
         job = _jobs.get(job_id)
         if job is None:
-            return jsonify({'success': False, 'error': 'Unknown job id'}), 404
+            return _job_status_from_disk(job_id)
         payload = {
             'success': True,
             'status': job['status'],
@@ -289,6 +490,30 @@ def job_status(job_id):
             payload['analysis_id'] = job['analysis_id']
         elif job['status'] == 'error':
             payload['error'] = job['error']
+    return jsonify(payload)
+
+
+def _job_status_from_disk(job_id):
+    """Serve a job's final status from disk (e.g. after a server restart)."""
+    meta_path = _job_meta_path(job_id)
+    if not meta_path.is_file():
+        return jsonify({'success': False, 'error': 'Unknown job id'}), 404
+    try:
+        with open(meta_path, 'r', encoding='utf-8') as f:
+            meta = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return jsonify({'success': False, 'error': 'Unknown job id'}), 404
+
+    payload = {
+        'success': True,
+        'status': meta.get('status'),
+        'progress': {'stage': meta.get('status'), 'completed': 1, 'total': 1},
+    }
+    if meta.get('status') == 'done' and meta.get('analysis_id'):
+        payload['analysis_id'] = meta['analysis_id']
+        payload['data'] = _load_analysis(meta['analysis_id'])
+    elif meta.get('status') == 'error':
+        payload['error'] = meta.get('error')
     return jsonify(payload)
 
 
@@ -414,6 +639,9 @@ if __name__ == '__main__':
     host = os.getenv('API_HOST', '127.0.0.1')
     port = int(os.getenv('API_PORT', '5000'))
     debug = os.getenv('FLASK_DEBUG', '').lower() in ('1', 'true', 'on')
+
+    # Re-queue any jobs that were interrupted by the last shutdown
+    recover_interrupted_jobs()
 
     print("=" * 60)
     print("Slack Question Analyzer")

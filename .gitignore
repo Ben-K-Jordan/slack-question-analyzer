@@ -8,6 +8,7 @@ __pycache__/
 .embedding_cache/
 .pytest_cache/
 analyses/
+jobs/
 
 # Made with Bob
 *.egg-info/

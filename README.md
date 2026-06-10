@@ -333,9 +333,20 @@ Dashboard features:
 - Until your first analysis, both views show demo data clearly labeled "sample data"
 
 Analyses are queued one at a time by default so a local Ollama isn't overloaded
-(`MAX_CONCURRENT_JOBS` to change). Other server settings: `API_HOST` (default
-`127.0.0.1`), `API_PORT` (default `5000`), `FLASK_DEBUG`, `MAX_CONTENT_MB`
-(default `50`), `ANALYSES_DIR` (default `analyses/`).
+(`MAX_CONCURRENT_JOBS` to change), can be **cancelled** mid-run from the upload modal,
+and **survive server restarts**: jobs are persisted under `jobs/` and anything that was
+queued or running when the server stopped is automatically re-queued on startup.
+Other server settings: `API_HOST` (default `127.0.0.1`), `API_PORT` (default `5000`),
+`FLASK_DEBUG`, `MAX_CONTENT_MB` (default `50`), `ANALYSES_DIR` (default `analyses/`),
+`JOBS_DIR` (default `jobs/`).
+
+Uploads accept `.json`, `.txt`, `.csv` — or a **zipped Slack export**: every
+`.json`/`.txt`/`.csv` file inside the zip (e.g. one JSON file per day) is merged and
+analyzed as a single corpus.
+
+Very large transcripts are handled too: above `LARGE_CLUSTERING_THRESHOLD` (default
+2000) distinct questions, grouping switches to memory-safe leader clustering instead
+of a full n×n similarity matrix, and the dashboard paginates long topic lists.
 
 > **Security note:** the server has no authentication and CORS is open — it is meant
 > to run on your own machine. Don't set `API_HOST=0.0.0.0` on a shared network.
@@ -345,8 +356,9 @@ Analyses are queued one at a time by default so a local Ollama isn't overloaded
 | Endpoint | Method | Description |
 |---|---|---|
 | `/api/health` | GET | Health check — verifies Ollama/keys for the configured provider (or `?provider=...`) |
-| `/api/analyze` | POST | Start an analysis job. Body: `{"content": "...", "provider": "ollama", "threshold": 0.85}`. Returns `202` with `{"job_id": "..."}` |
-| `/api/jobs/<job_id>` | GET | Job status (`queued`/`running`/`done`/`error`) and progress; includes the full result when done |
+| `/api/analyze` | POST | Start an analysis job. JSON body `{"content": "...", "provider": "ollama", "threshold": 0.85}` or multipart `files=` upload (`.json`/`.txt`/`.csv`/`.zip`). Returns `202` with `{"job_id": "..."}` |
+| `/api/jobs/<job_id>` | GET | Job status (`queued`/`running`/`done`/`error`/`cancelled`) and progress; includes the full result when done |
+| `/api/jobs/<job_id>/cancel` | POST | Cancel a queued or running job |
 | `/api/analyses` | GET | List of saved past analyses (newest first) |
 | `/api/analyses/latest` | GET | Full results of the most recent analysis |
 | `/api/analyses/<id>` | GET | Full results of a specific analysis |

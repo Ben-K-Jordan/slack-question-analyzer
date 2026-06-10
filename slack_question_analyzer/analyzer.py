@@ -91,13 +91,24 @@ class QuestionAnalyzer:
         Returns:
             Dictionary containing analysis results
         """
+        return self.analyze_contents([content], progress_callback=progress_callback)
+
+    def analyze_contents(self, contents: List[str], progress_callback=None) -> Dict:
+        """
+        Analyze one or more Slack content strings as a single corpus.
+
+        Used for multi-file uploads (e.g. a zipped Slack export with one JSON
+        file per day): messages from every file are merged before analysis.
+        """
         def report(stage, completed=0, total=1):
             if progress_callback:
                 progress_callback(stage, completed, total)
 
         report('extracting')
-        logger.info("Step 1: Extracting questions from Slack content...")
-        messages = self.extractor.extract_messages(content)
+        logger.info("Step 1: Extracting questions from %d file(s)...", len(contents))
+        messages = []
+        for content in contents:
+            messages.extend(self.extractor.extract_messages(content))
         questions = self.extractor.questions_from_messages(messages)
         logger.info("Found %d questions", len(questions))
         report('extracting', 1, 1)

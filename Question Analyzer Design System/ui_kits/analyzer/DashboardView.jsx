@@ -15,9 +15,11 @@ function DashboardView() {
     return () => { cancelled = true; };
   }, []);
 
+  const PAGE_SIZE = 50;
   const isDemo = !analysisResults;
   const d = analysisResults ? transformAnalysisResults(analysisResults) : window.DASHBOARD_DATA;
   const [query, setQuery] = React.useState('');
+  const [visibleCount, setVisibleCount] = React.useState(PAGE_SIZE);
 
   const exportBtn = {
     height: 32, padding: '0 12px', display: 'inline-flex', alignItems: 'center', gap: 6,
@@ -71,7 +73,7 @@ function DashboardView() {
             ) : null}
             <div style={search}>
               <Icon name="search" size={16} color="var(--text-helper)" />
-              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter questions or topics"
+              <input value={query} onChange={(e) => { setQuery(e.target.value); setVisibleCount(PAGE_SIZE); }} placeholder="Filter questions or topics"
                 style={{ border: 'none', outline: 'none', background: 'transparent', fontFamily: 'var(--font-sans)', fontSize: 14, width: '100%', color: 'var(--text-primary)' }} />
             </div>
           </div>
@@ -107,13 +109,19 @@ function DashboardView() {
       </Reveal>
 
       <div style={{ border: '1px solid var(--border-subtle)', borderBottom: 'none', background: '#fff' }}>
-        {groups.map((g, i) => (
+        {groups.slice(0, visibleCount).map((g, i) => (
           <RankedRow key={g.rank} rank={g.rank} index={i} question={g.question} count={g.count}
             maxCount={max} keywords={g.keywords} similarity={g.similarity} questions={g.questions}
             topic={g.topic} summary={g.summary} defaultOpen={i === 0 && !query} />
         ))}
         {groups.length === 0 ? <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-helper)', borderBottom: '1px solid var(--border-subtle)' }}>No topics match “{query}”.</div> : null}
       </div>
+      {groups.length > visibleCount ? (
+        <button onClick={() => setVisibleCount((v) => v + PAGE_SIZE)}
+          style={{ display: 'block', width: '100%', padding: '13px 0', marginTop: -1, background: '#fff', border: '1px solid var(--border-subtle)', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 13, color: 'var(--blue-60)' }}>
+          Show {Math.min(PAGE_SIZE, groups.length - visibleCount)} more · {groups.length - visibleCount} remaining
+        </button>
+      ) : null}
     </div>
   );
 }

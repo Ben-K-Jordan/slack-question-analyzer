@@ -1,6 +1,10 @@
 """Tests for the Flask API server: jobs, history, health, and validation."""
 
+import io
+import json
 import time
+import zipfile
+import threading
 
 import numpy as np
 import pytest
@@ -12,6 +16,7 @@ from api_server import app
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(api_server, 'ANALYSES_DIR', tmp_path / 'analyses')
+    monkeypatch.setattr(api_server, 'JOBS_DIR', tmp_path / 'jobs')
     monkeypatch.setattr(api_server, '_jobs', {})
     app.config['TESTING'] = True
     with app.test_client() as test_client:
@@ -51,7 +56,7 @@ def wait_for_job(client, job_id, timeout=10):
     while time.time() < deadline:
         response = client.get(f'/api/jobs/{job_id}')
         body = response.get_json()
-        if body['status'] in ('done', 'error'):
+        if body['status'] in ('done', 'error', 'cancelled'):
             return body
         time.sleep(0.05)
     pytest.fail('job did not finish in time')
@@ -127,6 +132,122 @@ def test_delete_analysis(client, fake_engine):
     # path check or 405 when routing diverts them to the GET-only UI route)
     assert client.delete(f'/api/analyses/{analysis_id}').status_code == 404
     assert client.delete('/api/analyses/..%2F..%2Fetc%2Fpasswd').status_code in (404, 405)
+
+
+def test_multipart_single_file_upload(client, fake_engine):
+    response = client.post('/api/analyze', data={
+        'files': (io.BytesIO(SAMPLE_CONTENT.encode('utf-8')), 'export.txt'),
+        'provider': 'ollama',
+        'threshold': '0.85',
+    }, content_type='multipart/form-data')
+    assert response.status_code == 202
+
+    body = wait_for_job(client, response.get_json()['job_id'])
+    assert body['status'] == 'done'
+    assert body['data']['total_questions'] == 3
+
+
+def test_zip_upload_merges_day_files(client, fake_engine):
+    """A zipped Slack export (per-day JSON files) is analyzed as one corpus."""
+    day1 = json.dumps([{'text': 'How do I reset my password?', 'ts': '1704412800.0'}])
+    day2 = json.dumps([{'text': 'What is the deploy schedule for production releases?',
+                        'ts': '1704499200.0'}])
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w') as archive:
+        archive.writestr('channel/2024-01-05.json', day1)
+        archive.writestr('channel/2024-01-06.json', day2)
+        archive.writestr('__MACOSX/channel/._2024-01-05.json', 'junk')
+        archive.writestr('channel/image.png', b'\x89PNG')
+    buffer.seek(0)
+
+    response = client.post('/api/analyze', data={
+        'files': (buffer, 'slack-export.zip'),
+    }, content_type='multipart/form-data')
+    assert response.status_code == 202
+
+    body = wait_for_job(client, response.get_json()['job_id'])
+    assert body['status'] == 'done'
+    assert body['data']['total_questions'] == 2  # merged across both day files
+
+
+def test_zip_without_text_files_rejected(client):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w') as archive:
+        archive.writestr('image.png', b'\x89PNG')
+    buffer.seek(0)
+    response = client.post('/api/analyze', data={
+        'files': (buffer, 'export.zip'),
+    }, content_type='multipart/form-data')
+    assert response.status_code == 400
+    assert 'no .json' in response.get_json()['error']
+
+
+def test_cancel_running_job(client, monkeypatch):
+    monkeypatch.setenv('GROUP_LABELS', 'off')
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_batch(self, texts, progress_callback=None):
+        started.set()
+        release.wait(timeout=5)
+        if progress_callback:
+            progress_callback(1, 1)  # raises JobCancelled once flagged
+        return np.array([[1.0, 0.0] for _ in texts])
+
+    monkeypatch.setattr(
+        'slack_question_analyzer.similarity_analyzer.SimilarityAnalyzer.get_embeddings_batch',
+        slow_batch)
+
+    content = ("How do I reset my password?\n"
+               "-----------------------------------------------------------\n"
+               "What is the deploy schedule for production releases?\n")
+    job_id = client.post('/api/analyze', json={'content': content}).get_json()['job_id']
+
+    assert started.wait(timeout=5)
+    assert client.post(f'/api/jobs/{job_id}/cancel').status_code == 200
+    release.set()
+
+    body = wait_for_job(client, job_id)
+    assert body['status'] == 'cancelled'
+    # Cancelled runs leave no saved analysis behind
+    assert client.get('/api/analyses').get_json()['analyses'] == []
+
+
+def test_cancel_unknown_job(client):
+    assert client.post('/api/jobs/nope/cancel').status_code == 404
+
+
+def test_interrupted_jobs_recover_after_restart(client, fake_engine):
+    """A job that was queued/running when the server died is re-queued."""
+    job_id = 'restartedjob123'
+    api_server.JOBS_DIR.mkdir(parents=True, exist_ok=True)
+    with open(api_server._job_meta_path(job_id), 'w', encoding='utf-8') as f:
+        json.dump({'status': 'running', 'provider': 'ollama', 'threshold': 0.85,
+                   'created_at': time.time(), 'finished_at': None,
+                   'analysis_id': None, 'error': None}, f)
+    with open(api_server._job_content_path(job_id), 'w', encoding='utf-8') as f:
+        json.dump([SAMPLE_CONTENT], f)
+
+    assert api_server.recover_interrupted_jobs() == 1
+
+    body = wait_for_job(client, job_id)
+    assert body['status'] == 'done'
+    assert body['data']['total_questions'] == 3
+    assert len(client.get('/api/analyses').get_json()['analyses']) == 1
+
+
+def test_done_job_status_served_from_disk_after_restart(client, fake_engine):
+    job_id = client.post('/api/analyze', json={'content': SAMPLE_CONTENT}).get_json()['job_id']
+    finished = wait_for_job(client, job_id)
+
+    # Simulate a restart wiping in-memory job state
+    with api_server._jobs_lock:
+        api_server._jobs.clear()
+
+    body = client.get(f'/api/jobs/{job_id}').get_json()
+    assert body['status'] == 'done'
+    assert body['analysis_id'] == finished['analysis_id']
+    assert body['data']['total_questions'] == 3
 
 
 def test_health_validates_azure_and_openai_keys(client, monkeypatch):
