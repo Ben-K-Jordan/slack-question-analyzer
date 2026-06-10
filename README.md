@@ -12,6 +12,10 @@ AI-powered tool that analyzes Slack questions, groups similar ones together, and
   - **Standard OpenAI**
 - **Ranked Results**: Groups questions by frequency with similarity scores
 - **Keyword Extraction**: Identifies key topics in each question group
+- **Date Tracking**: Shows when each question group was first and last asked
+- **Persistent Embedding Cache**: Embeddings are cached on disk (`.embedding_cache/`), so re-running an analysis is near-instant and never pays for the same API call twice
+- **Automatic Retries**: Transient provider/network failures are retried with exponential backoff
+- **Multiple Output Formats**: Export results as JSON, CSV, or a Markdown report
 - **CLI Interface**: Easy-to-use command-line tool
 
 ## Installation
@@ -80,12 +84,40 @@ Higher threshold = stricter grouping (0.0 to 1.0):
 python -m src.cli analyze example_input.txt --threshold 0.9
 ```
 
+### Choose an Output Format
+
+The output format is inferred from the file extension:
+
+```bash
+python -m src.cli analyze example_input.txt -o results.json   # machine-readable
+python -m src.cli analyze example_input.txt -o results.csv    # one row per question
+python -m src.cli analyze example_input.txt -o report.md      # readable report
+```
+
+### Embedding Cache
+
+Embeddings are cached in `.embedding_cache/` (one file per provider/model), making
+repeat runs near-instant. To bypass it:
+
+```bash
+python -m src.cli analyze example_input.txt --no-cache
+```
+
+You can also set `EMBEDDING_CACHE=off` or `EMBEDDING_CACHE_DIR=/path/to/cache` in `.env`.
+
 ### Validate Input File
 
 Check if your input file is formatted correctly:
 
 ```bash
 python -m src.cli validate example_input.txt
+```
+
+## Running Tests
+
+```bash
+pip install pytest
+python -m pytest tests/
 ```
 
 ## Input Format

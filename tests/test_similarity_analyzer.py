@@ -1,0 +1,118 @@
+"""Tests for similarity grouping and the embedding cache."""
+
+import numpy as np
+import pytest
+
+from src.similarity_analyzer import SimilarityAnalyzer, EmbeddingCache, EmbeddingError
+
+
+def make_analyzer(monkeypatch, threshold='0.85'):
+    monkeypatch.setenv('SIMILARITY_THRESHOLD', threshold)
+    return SimilarityAnalyzer(provider='ollama', use_disk_cache=False)
+
+
+def question(text):
+    return {'text': text, 'normalized_text': text.lower(), 'date': 'Unknown',
+            'original_message': text}
+
+
+def test_groups_similar_questions(monkeypatch):
+    analyzer = make_analyzer(monkeypatch)
+
+    # Two near-identical vectors and one orthogonal one
+    fake_embeddings = np.array([
+        [1.0, 0.0, 0.0],
+        [0.99, 0.05, 0.0],
+        [0.0, 1.0, 0.0],
+    ])
+    monkeypatch.setattr(analyzer, 'get_embeddings_batch', lambda texts: fake_embeddings)
+
+    questions = [question('How do I reset my password?'),
+                 question('How can I reset my password?'),
+                 question('What is the deploy schedule?')]
+    groups = analyzer.group_similar_questions(questions)
+
+    assert len(groups) == 2
+    assert groups[0]['count'] == 2
+    assert groups[1]['count'] == 1
+    assert 0.0 <= groups[0]['avg_similarity'] <= 1.0
+
+
+def test_empty_input_returns_no_groups(monkeypatch):
+    analyzer = make_analyzer(monkeypatch)
+    assert analyzer.group_similar_questions([]) == []
+
+
+def test_invalid_threshold_rejected(monkeypatch):
+    monkeypatch.setenv('SIMILARITY_THRESHOLD', '1.5')
+    with pytest.raises(ValueError):
+        SimilarityAnalyzer(provider='ollama', use_disk_cache=False)
+
+    monkeypatch.setenv('SIMILARITY_THRESHOLD', 'abc')
+    with pytest.raises(ValueError):
+        SimilarityAnalyzer(provider='ollama', use_disk_cache=False)
+
+
+def test_invalid_provider_rejected(monkeypatch):
+    with pytest.raises(ValueError):
+        SimilarityAnalyzer(provider='something-else')
+
+
+def test_batch_raises_when_provider_fails(monkeypatch):
+    analyzer = make_analyzer(monkeypatch)
+    analyzer.MAX_RETRIES = 1
+
+    def boom(text):
+        raise EmbeddingError('connection refused')
+
+    monkeypatch.setattr(analyzer, '_ollama_embedding', boom)
+    with pytest.raises(EmbeddingError):
+        analyzer.get_embeddings_batch(['some question'])
+
+
+def test_batch_uses_cache_and_dedupes(monkeypatch):
+    analyzer = make_analyzer(monkeypatch)
+    calls = []
+
+    def fake_embedding(text):
+        calls.append(text)
+        return [1.0, 0.0]
+
+    monkeypatch.setattr(analyzer, '_ollama_embedding', fake_embedding)
+    result = analyzer.get_embeddings_batch(['a', 'a', 'b'])
+
+    assert sorted(calls) == ['a', 'b']  # 'a' embedded once despite appearing twice
+    assert result.shape == (3, 2)
+
+    # Second run should be fully served from cache
+    calls.clear()
+    analyzer.get_embeddings_batch(['a', 'b'])
+    assert calls == []
+
+
+def test_embedding_cache_roundtrip(tmp_path):
+    cache = EmbeddingCache('ollama', 'test-model', cache_dir=str(tmp_path))
+    assert cache.get('hello') is None
+
+    cache.set('hello', [0.1, 0.2])
+    cache.save()
+
+    reloaded = EmbeddingCache('ollama', 'test-model', cache_dir=str(tmp_path))
+    assert reloaded.get('hello') == [0.1, 0.2]
+
+
+def test_embedding_cache_survives_corruption(tmp_path):
+    cache = EmbeddingCache('ollama', 'test-model', cache_dir=str(tmp_path))
+    cache.set('hello', [0.1])
+    cache.save()
+    cache.cache_path.write_text('{not valid json')
+
+    reloaded = EmbeddingCache('ollama', 'test-model', cache_dir=str(tmp_path))
+    assert reloaded.get('hello') is None  # starts fresh instead of crashing
+
+
+def test_disabled_cache_does_not_write(tmp_path):
+    cache = EmbeddingCache('ollama', 'test-model', cache_dir=str(tmp_path), enabled=False)
+    cache.set('hello', [0.1])
+    cache.save()
+    assert not cache.cache_path.exists()
