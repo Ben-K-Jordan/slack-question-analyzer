@@ -203,6 +203,37 @@ def test_clearly_different_groups_skip_the_verifier(monkeypatch):
     assert len(groups) == 2
 
 
+def test_average_link_prevents_chaining(monkeypatch):
+    """
+    Regression for the real-world mega-group: in a domain-homogeneous corpus
+    every adjacent pair can clear the threshold (A~B, B~C) while A and C are
+    unrelated. Single-link chains them into one group; average-link must not.
+    """
+    analyzer = make_analyzer(monkeypatch, threshold='0.75')
+    matrix = np.array([
+        [1.0, 0.80, 0.20],
+        [0.80, 1.0, 0.80],
+        [0.20, 0.80, 1.0],
+    ])
+    clusters = analyzer._cluster_buckets(3, matrix)
+    # B joins A (0.8). C's average to {A,B} is (0.2+0.8)/2 = 0.5 < 0.75: stays out
+    assert clusters == [[0, 1], [2]]
+
+
+def test_average_link_keeps_two_tight_clusters_apart(monkeypatch):
+    """Two tight pairs with elevated cross-similarity stay two groups."""
+    analyzer = make_analyzer(monkeypatch, threshold='0.75')
+    matrix = np.array([
+        [1.0, 0.90, 0.76, 0.60],
+        [0.90, 1.0, 0.60, 0.60],
+        [0.76, 0.60, 1.0, 0.90],
+        [0.60, 0.60, 0.90, 1.0],
+    ])
+    clusters = analyzer._cluster_buckets(4, matrix)
+    # C's avg to {A,B} = (0.76+0.60)/2 = 0.68 < 0.75 despite the 0.76 best link
+    assert clusters == [[0, 1], [2, 3]]
+
+
 def test_large_corpus_uses_leader_clustering(monkeypatch):
     """Above LARGE_CLUSTERING_THRESHOLD, grouping avoids the full n^2 matrix."""
     analyzer = make_analyzer(monkeypatch)
