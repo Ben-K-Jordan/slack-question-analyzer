@@ -14,7 +14,8 @@ COPY ["Question Analyzer Design System", "./Question Analyzer Design System"]
 # Bind to all interfaces inside the container; reachable via the mapped port.
 # OLLAMA_URL default works with Docker Desktop; compose overrides it.
 ENV API_HOST=0.0.0.0 \
-    OLLAMA_URL=http://host.docker.internal:11434
+    OLLAMA_URL=http://host.docker.internal:11434 \
+    NO_BROWSER=1
 
 EXPOSE 5000
 
