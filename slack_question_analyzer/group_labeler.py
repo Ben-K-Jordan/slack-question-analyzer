@@ -130,6 +130,20 @@ DETECT_SYSTEM = (
     "\"question\": \"<the rewritten question>\"}]}. Use an empty list if none qualify."
 )
 
+EXTRACT_SYSTEM = (
+    "You extract every question and request for help from Slack messages.\n"
+    "Rules:\n"
+    "- Rewrite each one as a clear, self-contained question, dropping greetings "
+    "('Hi team'), signatures, and filler.\n"
+    "- A message may contain several questions: output one entry per question, "
+    "repeating the message number.\n"
+    "- Implicit help requests count ('stuck all day, the webhook keeps timing out' "
+    "-> 'How do I fix webhook timeouts?').\n"
+    "- Skip statements, status updates, headers, and answers.\n"
+    "Respond with JSON only: {\"questions\": [{\"index\": <message number>, "
+    "\"question\": \"<the question>\"}]}. Use an empty list if none qualify."
+)
+
 ANSWERED_SYSTEM = (
     "You decide whether the replies in a Slack thread actually answered the question. "
     "A reply that only acknowledges, asks for more details, or says 'I'll look into it' "
@@ -362,11 +376,24 @@ class GroupLabeler:
         Find implicit help requests in messages the regex extractor skipped.
         Returns [{'index': int, 'question': str}], empty on failure.
         """
+        return self._questions_from_llm(message_texts, DETECT_SYSTEM) or []
+
+    def extract_questions(self, message_texts: List[str]) -> Optional[List[Dict]]:
+        """
+        LLM-first extraction (LLM_EXTRACTION=full): pull every question out of
+        every message, cleaned and rewritten. Multiple questions per message
+        are allowed. Returns [{'index': int, 'question': str}]; an empty list
+        means "no questions here", None means the call failed.
+        """
+        return self._questions_from_llm(message_texts, EXTRACT_SYSTEM)
+
+    def _questions_from_llm(self, message_texts: List[str],
+                            system: str) -> Optional[List[Dict]]:
         numbered = '\n'.join(f"{i}. {text[:300]}" for i, text in enumerate(message_texts))
-        data = self._generate_json(DETECT_SYSTEM, f"Messages:\n{numbered}", DETECT_SCHEMA,
+        data = self._generate_json(system, f"Messages:\n{numbered}", DETECT_SCHEMA,
                                    max_tokens=500)
         if data is None or not isinstance(data.get('questions'), list):
-            return []
+            return None
 
         found = []
         for item in data['questions']:

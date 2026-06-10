@@ -288,6 +288,44 @@ def test_llm_detection_adds_missed_questions(monkeypatch):
     assert 'How do I fix webhook timeouts?' in texts
 
 
+def test_full_llm_extraction_mode(monkeypatch):
+    """LLM_EXTRACTION=full: the LLM extracts and cleans every question."""
+    monkeypatch.setenv('LLM_EXTRACTION', 'full')
+    content = (
+        "2024-01-05\nHi Team, Can I check if the agent comes pre-installed?\n"
+        "-----------------------------------------------------------\n"
+        "2024-01-06\nThe deploy finished fine.\n"
+    )
+    vectors = {'does the metering agent come pre-installed?': [1.0, 0.0]}
+    analyzer = make_analyzer(monkeypatch, vectors=vectors, label_groups=True)
+    stub_llm(monkeypatch, analyzer,
+             label_group=lambda texts, keywords=None: None,
+             verify_same_topic=lambda a, b: None,
+             extract_questions=lambda texts: [
+                 {'index': 0, 'question': 'Does the Metering Agent come pre-installed?'}
+             ] if 'pre-installed' in texts[0] else [],
+             summarize_analysis=lambda groups, total: None)
+
+    results = analyzer.analyze_slack_content(content)
+    assert results['total_questions'] == 1
+    question = results['ungrouped_questions'][0]
+    assert question['text'] == 'Does the Metering Agent come pre-installed?'
+    assert question['llm_extracted'] is True
+
+
+def test_full_extraction_falls_back_to_regex_on_llm_failure(monkeypatch):
+    monkeypatch.setenv('LLM_EXTRACTION', 'full')
+    analyzer = make_analyzer(monkeypatch, label_groups=True)
+    stub_llm(monkeypatch, analyzer,
+             label_group=lambda texts, keywords=None: None,
+             verify_same_topic=lambda a, b: None,
+             extract_questions=lambda texts: None,  # LLM call failed
+             summarize_analysis=lambda groups, total: None)
+
+    results = analyzer.analyze_slack_content(SAMPLE_CONTENT)
+    assert results['total_questions'] == 3  # regex fallback kept everything
+
+
 def test_answer_detection_counts_resolved_threads(monkeypatch):
     content = json.dumps([
         {'text': 'How do I reset my password?', 'ts': '1704412800.0'},
