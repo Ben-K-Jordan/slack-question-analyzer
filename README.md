@@ -28,24 +28,42 @@ AI-powered tool that analyzes Slack questions, groups similar ones together, and
 
 ### Prerequisites
 
-- Python 3.8 or higher
+- Python 3.10 or higher
 - (Optional) Ollama installed locally for free embeddings
+- (Alternative) Docker — see [Running with Docker](#running-with-docker)
 
 ### Setup
 
 1. Clone or download this repository
 
-2. Install dependencies:
+2. Install the package (editable, with dev tools):
 ```bash
-pip install -r requirements.txt
+pip install -e ".[dev]"        # or: pip install -r requirements.txt (same thing)
 ```
+
+This installs the `slack-analyzer` command.
 
 3. Configure your AI provider:
 ```bash
-python -m src.cli setup
+slack-analyzer setup
 ```
 
 This will guide you through setting up your preferred AI provider.
+
+### Running with Docker
+
+The compose file runs the whole stack — the analyzer (API + dashboard) and Ollama:
+
+```bash
+docker compose up -d --build
+docker compose exec ollama ollama pull nomic-embed-text
+docker compose exec ollama ollama pull llama3.2   # optional: enables the LLM features
+```
+
+Then open http://localhost:5000. Analyses, the embedding cache, and Ollama models
+persist in named volumes. To run just the analyzer container against an Ollama on
+your host, `docker build -t slack-question-analyzer . && docker run -p 5000:5000
+slack-question-analyzer` (it defaults to `host.docker.internal:11434`).
 
 ### Ollama Setup (Recommended)
 
@@ -65,21 +83,21 @@ ollama pull nomic-embed-text
 Analyze a file containing Slack questions:
 
 ```bash
-python -m src.cli analyze example_input.txt
+slack-analyzer analyze example_input.txt
 ```
 
 ### Save Results to JSON
 
 ```bash
-python -m src.cli analyze example_input.txt -o results.json
+slack-analyzer analyze example_input.txt -o results.json
 ```
 
 ### Use Specific AI Provider
 
 ```bash
-python -m src.cli analyze example_input.txt --provider ollama
-python -m src.cli analyze example_input.txt --provider azure
-python -m src.cli analyze example_input.txt --provider openai
+slack-analyzer analyze example_input.txt --provider ollama
+slack-analyzer analyze example_input.txt --provider azure
+slack-analyzer analyze example_input.txt --provider openai
 ```
 
 ### Adjust Similarity Threshold
@@ -87,7 +105,7 @@ python -m src.cli analyze example_input.txt --provider openai
 Higher threshold = stricter grouping (0.0 to 1.0):
 
 ```bash
-python -m src.cli analyze example_input.txt --threshold 0.9
+slack-analyzer analyze example_input.txt --threshold 0.9
 ```
 
 ### Choose an Output Format
@@ -95,9 +113,9 @@ python -m src.cli analyze example_input.txt --threshold 0.9
 The output format is inferred from the file extension:
 
 ```bash
-python -m src.cli analyze example_input.txt -o results.json   # machine-readable
-python -m src.cli analyze example_input.txt -o results.csv    # one row per question
-python -m src.cli analyze example_input.txt -o report.md      # readable report
+slack-analyzer analyze example_input.txt -o results.json   # machine-readable
+slack-analyzer analyze example_input.txt -o results.csv    # one row per question
+slack-analyzer analyze example_input.txt -o report.md      # readable report
 ```
 
 ### Embedding Cache
@@ -106,7 +124,7 @@ Embeddings are cached in `.embedding_cache/` (one file per provider/model), maki
 repeat runs near-instant. To bypass it:
 
 ```bash
-python -m src.cli analyze example_input.txt --no-cache
+slack-analyzer analyze example_input.txt --no-cache
 ```
 
 You can also set `EMBEDDING_CACHE=off` or `EMBEDDING_CACHE_DIR=/path/to/cache` in `.env`.
@@ -116,7 +134,7 @@ You can also set `EMBEDDING_CACHE=off` or `EMBEDDING_CACHE_DIR=/path/to/cache` i
 Check if your input file is formatted correctly:
 
 ```bash
-python -m src.cli validate example_input.txt
+slack-analyzer validate example_input.txt
 ```
 
 ## Input Formats
@@ -262,24 +280,24 @@ SIMILARITY_THRESHOLD=0.85
 ollama serve
 
 # Run analysis
-python -m src.cli analyze example_input.txt -o results.json
+slack-analyzer analyze example_input.txt -o results.json
 ```
 
 ### Example 2: Analyze with Azure OpenAI
 
 ```bash
 # Set up Azure credentials
-python -m src.cli setup
+slack-analyzer setup
 
 # Run analysis
-python -m src.cli analyze example_input.txt --provider azure
+slack-analyzer analyze example_input.txt --provider azure
 ```
 
 ### Example 3: Strict Grouping
 
 ```bash
 # Only group very similar questions (threshold 0.95)
-python -m src.cli analyze example_input.txt --threshold 0.95
+slack-analyzer analyze example_input.txt --threshold 0.95
 ```
 
 ## Web Dashboard
@@ -403,19 +421,23 @@ Verify your `.env` file has the correct API keys and endpoints.
 
 ```
 slack-question-analyzer/
-├── src/
+├── slack_question_analyzer/
 │   ├── __init__.py
 │   ├── __main__.py
-│   ├── cli.py              # Command-line interface
+│   ├── cli.py              # Command-line interface (the slack-analyzer command)
 │   ├── analyzer.py         # Main analysis orchestration
-│   ├── question_extractor.py  # Question parsing logic
-│   └── similarity_analyzer.py # AI embedding & grouping
+│   ├── question_extractor.py  # Multi-format parsing & question detection
+│   ├── similarity_analyzer.py # Embeddings, dedupe tiers & grouping
+│   ├── group_labeler.py    # LLM prompting layer
+│   ├── weekly_stats.py     # Week-in-Review computation
+│   └── exporters.py        # CSV / Markdown export
 ├── tests/                  # pytest suite
-├── api_server.py           # Flask API for the web dashboard
+├── api_server.py           # Flask API + dashboard server
 ├── run_api_server.bat      # Windows launcher for the API server
 ├── Question Analyzer Design System/  # React dashboard + design system
+├── pyproject.toml          # Package metadata & dependencies
+├── Dockerfile / docker-compose.yml   # Container setup
 ├── example_input.txt       # Sample input file
-├── requirements.txt        # Python dependencies
 ├── .env.example            # Configuration template
 └── README.md
 ```
@@ -427,8 +449,8 @@ slack-question-analyzer/
 python -m pytest tests/
 
 # Manual smoke test
-python -m src.cli validate example_input.txt
-python -m src.cli analyze example_input.txt
+slack-analyzer validate example_input.txt
+slack-analyzer analyze example_input.txt
 ```
 
 ## License

@@ -4,8 +4,8 @@ import json
 
 import numpy as np
 
-from src.group_labeler import GroupLabeler
-from src.analyzer import QuestionAnalyzer
+from slack_question_analyzer.group_labeler import GroupLabeler
+from slack_question_analyzer.analyzer import QuestionAnalyzer
 
 
 class FakeResponse:
@@ -33,7 +33,7 @@ def patch_chat(monkeypatch, replies, captured=None):
             captured.append({'url': url, 'body': json})
         return chat_response(replies.pop(0))
 
-    monkeypatch.setattr('src.group_labeler.requests.post', fake_post)
+    monkeypatch.setattr('slack_question_analyzer.group_labeler.requests.post', fake_post)
 
 
 # ---- Output parsing & validation ----
@@ -101,7 +101,7 @@ def test_label_group_returns_none_on_connection_failure(monkeypatch):
     def boom(*args, **kwargs):
         raise ConnectionError('refused')
 
-    monkeypatch.setattr('src.group_labeler.requests.post', boom)
+    monkeypatch.setattr('slack_question_analyzer.group_labeler.requests.post', boom)
     assert GroupLabeler('ollama').label_group(['Anything?']) is None
 
 
@@ -150,7 +150,7 @@ def test_is_answered(monkeypatch):
 
 
 def test_available_checks_model_is_pulled(monkeypatch):
-    monkeypatch.setattr('src.group_labeler.requests.get',
+    monkeypatch.setattr('slack_question_analyzer.group_labeler.requests.get',
                         lambda *a, **k: FakeResponse({'models': [{'name': 'llama3.2:latest'}]}))
     labeler = GroupLabeler('ollama')
     labeler.model = 'llama3.2'
@@ -167,7 +167,7 @@ def test_available_false_when_ollama_unreachable(monkeypatch):
     def refuse(*args, **kwargs):
         raise requests_module.ConnectionError('refused')
 
-    monkeypatch.setattr('src.group_labeler.requests.get', refuse)
+    monkeypatch.setattr('slack_question_analyzer.group_labeler.requests.get', refuse)
     assert GroupLabeler('ollama').available() is False
 
 

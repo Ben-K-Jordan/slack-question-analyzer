@@ -2,7 +2,7 @@
 
 import json
 
-from src.question_extractor import QuestionExtractor
+from slack_question_analyzer.question_extractor import QuestionExtractor
 
 
 def test_json_list_with_slack_ts():

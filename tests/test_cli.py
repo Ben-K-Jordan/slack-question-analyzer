@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from click.testing import CliRunner
 
-from src.cli import cli
+from slack_question_analyzer.cli import cli
 
 SAMPLE_CONTENT = (
     "2024-01-05\nHow do I reset my password?\n"
@@ -30,7 +30,7 @@ def fake_engine(monkeypatch):
     def fake_batch(self, texts, progress_callback=None):
         return np.array([vectors[t] for t in texts])
 
-    monkeypatch.setattr('src.similarity_analyzer.SimilarityAnalyzer.get_embeddings_batch',
+    monkeypatch.setattr('slack_question_analyzer.similarity_analyzer.SimilarityAnalyzer.get_embeddings_batch',
                         fake_batch)
 
 

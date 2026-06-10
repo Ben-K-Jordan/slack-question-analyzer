@@ -6,7 +6,7 @@ import json
 import numpy as np
 import pytest
 
-from src.analyzer import QuestionAnalyzer
+from slack_question_analyzer.analyzer import QuestionAnalyzer
 
 SAMPLE_CONTENT = (
     "2024-01-05\n"

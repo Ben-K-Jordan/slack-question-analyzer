@@ -2,7 +2,7 @@
 
 from datetime import date
 
-from src.weekly_stats import parse_question_date, compute_weekly_stats, TREND_WEEKS
+from slack_question_analyzer.weekly_stats import parse_question_date, compute_weekly_stats, TREND_WEEKS
 
 
 def test_parse_question_date_formats():

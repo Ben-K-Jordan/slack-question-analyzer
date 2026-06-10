@@ -33,7 +33,7 @@ def fake_engine(monkeypatch):
             progress_callback(len(texts), len(texts))
         return np.array([vectors[t] for t in texts])
 
-    monkeypatch.setattr('src.similarity_analyzer.SimilarityAnalyzer.get_embeddings_batch',
+    monkeypatch.setattr('slack_question_analyzer.similarity_analyzer.SimilarityAnalyzer.get_embeddings_batch',
                         fake_batch)
 
 
