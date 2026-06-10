@@ -318,14 +318,30 @@ OLLAMA_MODEL=nomic-embed-text
 SIMILARITY_THRESHOLD=0.85
 ```
 
-## How It Works
+## How It Works — the category funnel
 
-1. **Question Extraction**: Parses Slack content and identifies questions using pattern matching
-2. **Normalization**: Cleans and normalizes questions for better comparison
-3. **Embedding Generation**: Converts questions to vector embeddings using AI
-4. **Similarity Calculation**: Computes cosine similarity between all question pairs
-5. **Grouping**: Clusters similar questions based on similarity threshold
-6. **Ranking**: Sorts groups by frequency and extracts keywords
+The pipeline is built so the language model is never asked to do the hard
+open-ended thing (find categories in a pile of questions). Embeddings handle
+similarity, plain code handles counting and merging, and the LLM only answers
+small closed questions (sort one item, judge one group).
+
+1. **Extraction**: the fast chat model extracts and rewrites every question
+   to be self-contained (regex + a quality-model double-check as safety nets)
+2. **Routing** (`taxonomy.json`): every question goes to its nearest bucket
+   anchor by embedding similarity. Top-2 anchors too close → the quality
+   model picks a number from a closed list. Near no anchor → kept and flagged
+   **needs review** (a growing review pile means a new category is being born)
+3. **In-bucket grouping**: clustering runs *inside* each bucket at a fixed
+   relaxed bar (`IN_BUCKET_THRESHOLD`); the learned topic bank claims
+   questions it recognizes, and the LLM audits every formed group
+4. **Merge map**: each bucket collapses into its fixed `category` from
+   `taxonomy.json` — the dashboard's themes strip, deterministic code
+5. **Ranking**: groups sort by frequency, then cohesion; keywords are scored
+   against the rest of the corpus
+
+The taxonomy is versioned data, not code: edit `taxonomy.json`, bump its
+`version`, and every result records which taxonomy version classified it
+(`metadata.routing`), along with routing health rates.
 
 ## Examples
 

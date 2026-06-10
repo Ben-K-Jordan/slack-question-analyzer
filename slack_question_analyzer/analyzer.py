@@ -15,6 +15,7 @@ from .question_extractor import QuestionExtractor
 from .similarity_analyzer import SimilarityAnalyzer
 from .group_labeler import GroupLabeler
 from .topic_bank import TopicBank
+from .taxonomy import Taxonomy, route_questions
 from .exporters import to_csv, to_markdown
 
 logger = logging.getLogger(__name__)
@@ -74,6 +75,7 @@ class QuestionAnalyzer:
         self._answers_mode = os.getenv('LLM_ANSWER_DETECTION', 'auto').lower()
         self._summary_mode = os.getenv('EXECUTIVE_SUMMARY', 'auto').lower()
         self._themes_mode = os.getenv('THEMES', 'auto').lower()
+        self._last_routing = None  # taxonomy routing health stats, per run
 
     def _llm_enabled(self, mode: str) -> bool:
         """Whether an optional LLM feature should run."""
@@ -158,8 +160,8 @@ class QuestionAnalyzer:
         # groups get good names from day one
         self._seed_topic_bank_if_empty()
 
-        # Funnel stage 1: the learned topic bank's categories claim questions
-        # by classification before any pairwise clustering
+        # The learned topic bank's categories claim questions by
+        # classification before any pairwise clustering
         known_topics = None
         bank = TopicBank(model=self.similarity_analyzer.embedding_model)
         if bank.enabled and bank.entries:
@@ -168,13 +170,19 @@ class QuestionAnalyzer:
                             if not e.get('model') or e['model'] == model]
 
         logger.info("Step 2: Grouping similar questions using AI...")
-        groups = self.similarity_analyzer.group_similar_questions(
-            questions,
-            progress_callback=(lambda done, total: report('embedding', done, total)),
-            verifier=verifier,
-            auditor=auditor,
-            known_topics=known_topics
-        )
+        self._last_routing = None
+        taxonomy = Taxonomy()
+        if taxonomy.enabled:
+            groups = self._group_with_taxonomy(questions, taxonomy, verifier,
+                                               auditor, known_topics, report)
+        else:
+            groups = self.similarity_analyzer.group_similar_questions(
+                questions,
+                progress_callback=(lambda done, total: report('embedding', done, total)),
+                verifier=verifier,
+                auditor=auditor,
+                known_topics=known_topics
+            )
         logger.info("Created %d question groups", len(groups))
         report('grouping', 1, 1)
 
@@ -282,6 +290,99 @@ class QuestionAnalyzer:
                     [m for i, (_, m) in enumerate(batch) if i not in recovered]))
         return questions
 
+    def _group_with_taxonomy(self, questions: List[Dict], taxonomy: Taxonomy,
+                             verifier, auditor, known_topics,
+                             report) -> List[Dict]:
+        """
+        The category funnel, taxonomy-first:
+
+        1. Route every question to its nearest bucket anchor (pure embedding
+           math). Top-2 anchors too close -> the LLM adjudicates a closed
+           single-number choice. Near no anchor -> kept, flagged for review.
+        2. Cluster WITHIN each bucket at a fixed relaxed bar (the corpus
+           there is coherent by construction, so the adaptive noise gate
+           must stay out of the way). Bank claims and the LLM audit still
+           apply inside each bucket.
+        3. Each bucket's fixed 'category' becomes the group's theme — the
+           final merge map is deterministic code, not a model.
+        """
+        sa = self.similarity_analyzer
+        anchor_embeddings = sa.get_embeddings_batch(taxonomy.anchor_texts())
+        question_embeddings = sa.get_embeddings_batch(
+            [q['normalized_text'] for q in questions],
+            progress_callback=(lambda done, total: report('embedding', done, total)))
+        assignments, ambiguous, outliers = route_questions(
+            question_embeddings, anchor_embeddings)
+
+        # LLM adjudication for the genuinely ambiguous routes (closed choice)
+        adjudicate = (self.labeler.choose_bucket
+                      if self.labeler is not None
+                      and self._llm_enabled(self._verify_mode) else None)
+        cap = int(os.getenv('ROUTE_LLM_MAX', '20'))
+        adjudicated = 0
+        for qi, candidate_indices in ambiguous:
+            choice = None
+            if adjudicate and adjudicated < cap:
+                adjudicated += 1
+                candidates = [{'id': taxonomy.buckets[k]['id'],
+                               'name': taxonomy.bucket_name(k)}
+                              for k in candidate_indices]
+                chosen_id = adjudicate(questions[qi]['text'], candidates)
+                if chosen_id is not None:
+                    choice = next((k for k in candidate_indices
+                                   if taxonomy.buckets[k]['id'] == chosen_id), None)
+            # Fallback: the embedding favorite (first candidate)
+            assignments[qi] = choice if choice is not None else candidate_indices[0]
+
+        self._last_routing = {
+            'taxonomy_version': taxonomy.version,
+            'routed': len(assignments),
+            'ambiguous': len(ambiguous),
+            'llm_adjudicated': adjudicated,
+            'needs_review': len(outliers),
+        }
+        logger.info("Routed %d question(s) into buckets (%d ambiguous, %d "
+                    "AI-adjudicated); %d kept for review (no category fits)",
+                    len(assignments), len(ambiguous), adjudicated, len(outliers))
+
+        by_bucket: Dict[int, List[int]] = {}
+        for qi, b in assignments.items():
+            by_bucket.setdefault(b, []).append(qi)
+
+        # Inside a coherent bucket a relaxed FIXED bar is safe (a pinned
+        # user threshold still wins)
+        if sa.threshold_pinned:
+            in_bucket_bar = sa.similarity_threshold
+        else:
+            in_bucket_bar = float(os.getenv('IN_BUCKET_THRESHOLD', '0.8'))
+
+        groups: List[Dict] = []
+        for b in sorted(by_bucket):
+            bucket_questions = [questions[qi] for qi in by_bucket[b]]
+            logger.info("Bucket '%s': grouping %d question(s) at bar %.2f...",
+                        taxonomy.bucket_name(b), len(bucket_questions), in_bucket_bar)
+            bucket_groups = sa.group_similar_questions(
+                bucket_questions, verifier=verifier, auditor=auditor,
+                known_topics=known_topics, fixed_threshold=in_bucket_bar)
+            category = taxonomy.final_category(b)
+            for group in bucket_groups:
+                group['bucket'] = taxonomy.bucket_name(b)
+                group['theme'] = category
+                for q in group['questions']:
+                    q['theme'] = category
+            groups.extend(bucket_groups)
+
+        # Outliers are kept as unique questions, visibly flagged — a funnel
+        # that quarantines its own uncertainty beats one that forces every
+        # item into the closest wrong home
+        for qi in outliers:
+            q = dict(questions[qi])
+            q['needs_review'] = True
+            logger.info("Needs review (no category fits): %.80r", q['text'])
+            groups.append({'representative_question': q['text'],
+                           'questions': [q], 'count': 1, 'avg_similarity': 1.0})
+        return groups
+
     def _assign_themes(self, groups: List[Dict],
                        unique_questions: List[Dict]) -> Optional[List[Dict]]:
         """
@@ -289,6 +390,19 @@ class QuestionAnalyzer:
         into 3-6 broad themes. Each group/question gets a 'theme'; returns the
         ordered theme list [{'name', 'count'}] for the dashboard funnel.
         """
+        # Taxonomy runs already themed everything via the deterministic merge
+        # map — just count, no LLM call
+        if any(g.get('theme') for g in groups) or any(q.get('theme') for q in unique_questions):
+            counts: Dict[str, int] = {}
+            for g in groups:
+                if g.get('theme'):
+                    counts[g['theme']] = counts.get(g['theme'], 0) + g['count']
+            for q in unique_questions:
+                if q.get('theme'):
+                    counts[q['theme']] = counts.get(q['theme'], 0) + 1
+            return [{'name': name, 'count': count}
+                    for name, count in sorted(counts.items(), key=lambda x: -x[1])]
+
         items = ([g.get('topic') or g['representative_question'] for g in groups]
                  + [q['text'] for q in unique_questions])
         if len(items) < 4 or not self._llm_enabled(self._themes_mode):
@@ -401,6 +515,9 @@ class QuestionAnalyzer:
             # The bar actually used: threshold raised above corpus noise (p90)
             'effective_threshold': self.similarity_analyzer.effective_threshold,
             'noise_gate': self.similarity_analyzer.noise_gate,
+            # Routing health (taxonomy runs): rising 'needs_review' over time
+            # means the taxonomy is drifting out of sync with real traffic
+            'routing': self._last_routing,
         }
 
     @staticmethod

@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "comment": "Routing taxonomy: questions are sorted into these buckets by embedding similarity to each bucket's 'anchor' description before any clustering. 'category' is the fixed merge map - the broad dashboard category each bucket collapses into. Edit freely; bump 'version' when you do.",
+  "buckets": [
+    {
+      "id": 1,
+      "name": "Antivirus & File Scanning",
+      "anchor": "Antivirus scanning of transferred files: virus detection, malware scanning, quarantine folders and quarantined files, scan failures, infected file handling, scan notifications and alerts on detection, ICAP scanner integration",
+      "category": "File Operations"
+    },
+    {
+      "id": 2,
+      "name": "Metering & Licensing",
+      "anchor": "Metering and licensing: the metering agent, metering server configuration, transaction counting and usage metering, license keys, licensing terms, billing of transactions",
+      "category": "Licensing & Metering"
+    },
+    {
+      "id": 3,
+      "name": "Scheduling & Performance",
+      "anchor": "Scheduling and performance: scheduled actions and schedulers, cron expressions, thread pools and thread counts, performance tuning, vertical and horizontal scaling, CPU cores, cluster nodes, load and throughput",
+      "category": "Operations & Performance"
+    },
+    {
+      "id": 4,
+      "name": "File Handling",
+      "anchor": "File handling operations: find task, move, copy, merge and rename files, control files, post-processing actions, file triggers, folder monitoring, file name patterns, archiving files",
+      "category": "File Operations"
+    },
+    {
+      "id": 5,
+      "name": "Connectivity & Authentication",
+      "anchor": "Connectivity and authentication: SFTP, FTPS and HTTPS connections, Azure Blob storage containers, AWS S3, OAuth and access tokens, container-level tokens, certificates and certificate stores, key vaults, credentials, proxies and firewalls",
+      "category": "Platform & Connectivity"
+    },
+    {
+      "id": 6,
+      "name": "Monitoring & Alerting",
+      "anchor": "Monitoring and alerting: end-to-end monitoring, e2e monitoring tools, alert and notification configuration, email notifications, dashboards, health checks, monitoring single applications, alerting on errors",
+      "category": "Operations & Performance"
+    },
+    {
+      "id": 7,
+      "name": "Errors, Logs & Bugs",
+      "anchor": "Errors and troubleshooting: exceptions and stack traces, NullPointerException, debug and error logs, log files, failed transfers, custom error codes, exit statuses, unexpected behavior, bug reports",
+      "category": "Operations & Performance"
+    },
+    {
+      "id": 8,
+      "name": "Install, Upgrade & Admin",
+      "anchor": "Installation and administration: installing and upgrading versions, container images, pre-installed components, user management, roles and permissions, admin UI configuration and UI settings, REST API administration and automation",
+      "category": "Platform & Connectivity"
+    }
+  ]
+}

@@ -348,7 +348,8 @@ class SimilarityAnalyzer:
 
     def group_similar_questions(self, questions: List[Dict],
                                 progress_callback=None, verifier=None,
-                                auditor=None, known_topics=None) -> List[Dict]:
+                                auditor=None, known_topics=None,
+                                fixed_threshold=None) -> List[Dict]:
         """
         Group similar questions together.
 
@@ -362,6 +363,16 @@ class SimilarityAnalyzer:
             progress_callback: Optional fn(completed, total) for embedding progress
             verifier: Optional fn(texts_a, texts_b) -> Optional[bool] used to
                       decide borderline merges (e.g. an LLM yes/no check)
+            auditor: Optional fn(texts) -> Optional[list] evicting outliers
+                     from formed groups
+            known_topics: Optional bank entries that claim questions by
+                          classification before clustering
+            fixed_threshold: Use exactly this bar — no noise gate, no
+                             auto-adjust. For clustering WITHIN a routed
+                             bucket: the corpus there is topically coherent
+                             by construction, so the adaptive gate (built to
+                             keep unrelated topics apart) would wrongly push
+                             the bar above genuine sub-groups.
 
         Returns:
             List of question groups with representative questions
@@ -372,7 +383,7 @@ class SimilarityAnalyzer:
         logger.info("Analyzing %d questions...", len(questions))
         self.last_similarity_stats = None
         self.threshold_auto_adjusted = False
-        self.effective_threshold = self.similarity_threshold
+        self.effective_threshold = fixed_threshold or self.similarity_threshold
         self.noise_gate = None
 
         # Tiers 1-2: merge duplicates without AI
@@ -415,7 +426,8 @@ class SimilarityAnalyzer:
             # in a single-domain channel, nomic scores unrelated questions
             # anywhere up to ~0.8+, so any fixed threshold eventually fails.
             # The bar rises above the bulk of pairwise similarities (p90).
-            self.effective_threshold = self._gated_threshold(len(buckets))
+            self.effective_threshold = (fixed_threshold if fixed_threshold
+                                        else self._gated_threshold(len(buckets)))
 
             # Funnel stage 1: known categories claim questions directly
             claimed_clusters, claimed = [], set()
@@ -436,6 +448,7 @@ class SimilarityAnalyzer:
             # the noise gate.
             stats = self.last_similarity_stats
             if (not self.threshold_pinned and not claimed_clusters
+                    and not fixed_threshold
                     and all(len(c) == 1 for c in clusters)
                     and stats and stats['max'] < self.effective_threshold):
                 separation = stats['max'] - stats['p90']

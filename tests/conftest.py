@@ -10,6 +10,8 @@ def isolated_topic_bank(tmp_path, monkeypatch):
     """
     monkeypatch.setenv('TOPIC_BANK_PATH', str(tmp_path / 'topic_bank.json'))
     monkeypatch.setenv('SEED_TOPICS_PATH', str(tmp_path / 'no_seeds.json'))
+    # The repo ships a real taxonomy.json; tests opt in to routing explicitly
+    monkeypatch.setenv('TAXONOMY_PATH', str(tmp_path / 'no_taxonomy.json'))
 
 
 @pytest.fixture(autouse=True)
