@@ -455,3 +455,78 @@ def test_warm_up_swallows_connection_errors(monkeypatch):
         raise _requests.ConnectionError('no ollama')
     monkeypatch.setattr('slack_question_analyzer.group_labeler.requests.post', boom)
     labeler.warm_up()  # must not raise
+
+
+# ---- Fast/quality model split ----
+
+def tags_response(monkeypatch, names):
+    monkeypatch.setattr(
+        'slack_question_analyzer.group_labeler.requests.get',
+        lambda *a, **k: FakeResponse({'models': [{'name': n} for n in names]}))
+
+
+def test_fast_model_split_when_both_downloaded(monkeypatch):
+    monkeypatch.setenv('OLLAMA_GENERATION_MODEL', 'llama3.1:8b')
+    tags_response(monkeypatch, ['llama3.1:8b', 'llama3.2:latest'])
+    labeler = GroupLabeler(provider='ollama')
+    assert labeler.available() is True
+    assert labeler.model == 'llama3.1:8b'        # judgment calls
+    assert labeler.fast_model == 'llama3.2'      # token-heavy extraction
+
+
+def test_no_split_when_small_model_missing(monkeypatch):
+    monkeypatch.setenv('OLLAMA_GENERATION_MODEL', 'llama3.1:8b')
+    tags_response(monkeypatch, ['llama3.1:8b'])
+    labeler = GroupLabeler(provider='ollama')
+    assert labeler.available() is True
+    assert labeler.fast_model == 'llama3.1:8b'
+
+
+def test_fast_model_env_override(monkeypatch):
+    monkeypatch.setenv('OLLAMA_GENERATION_MODEL', 'llama3.1:8b')
+    monkeypatch.setenv('OLLAMA_FAST_MODEL', 'qwen2.5:3b')
+    tags_response(monkeypatch, ['llama3.1:8b', 'llama3.2:latest', 'qwen2.5:3b'])
+    labeler = GroupLabeler(provider='ollama')
+    labeler.available()
+    assert labeler.fast_model == 'qwen2.5:3b'
+
+
+def test_extraction_uses_fast_model(monkeypatch):
+    monkeypatch.setenv('OLLAMA_GENERATION_MODEL', 'llama3.1:8b')
+    labeler = GroupLabeler(provider='ollama')
+    labeler.fast_model = 'llama3.2'
+    captured = []
+    patch_chat(monkeypatch, [json.dumps({'questions': []})], captured)
+    assert labeler.extract_questions(['How do I reset my password?']) == []
+    assert captured[0]['body']['model'] == 'llama3.2'
+
+
+def test_judgment_calls_use_quality_model(monkeypatch):
+    monkeypatch.setenv('OLLAMA_GENERATION_MODEL', 'llama3.1:8b')
+    labeler = GroupLabeler(provider='ollama')
+    labeler.fast_model = 'llama3.2'
+    captured = []
+    patch_chat(monkeypatch, [json.dumps({'outliers': []})], captured)
+    labeler.audit_group(['a?', 'b?'])
+    assert captured[0]['body']['model'] == 'llama3.1:8b'
+
+
+def test_warm_up_loads_both_models_when_split(monkeypatch):
+    monkeypatch.setenv('OLLAMA_GENERATION_MODEL', 'llama3.1:8b')
+    tags_response(monkeypatch, ['llama3.1:8b', 'llama3.2:latest'])
+
+    class InlineThread:
+        def __init__(self, target=None, args=(), daemon=None):
+            self._target, self._args = target, args
+        def start(self):
+            self._target(*self._args)
+
+    monkeypatch.setattr('slack_question_analyzer.group_labeler.threading.Thread',
+                        InlineThread)
+    labeler = GroupLabeler(provider='ollama')
+    captured = []
+    patch_chat(monkeypatch, ['x', 'y'], captured)
+    labeler.warm_up()
+    loaded = [c['body']['model'] for c in captured]
+    assert loaded == ['llama3.2', 'llama3.1:8b']  # fast first, quality after
+    assert all(c['body']['messages'] == [] for c in captured)
