@@ -11,7 +11,7 @@ from .inputs import load_input_files
 
 
 @click.group()
-@click.version_option(version='2.0.0')
+@click.version_option(version='2.1.0')
 @click.option('--verbose', '-v', is_flag=True, help='Show debug-level logs')
 def cli(verbose):
     """
@@ -239,6 +239,10 @@ def doctor():
     else:
         check(bool(os.getenv('OPENAI_API_KEY')), 'OpenAI API key configured',
               'Set OPENAI_API_KEY in .env')
+
+    if not os.getenv('DOMAIN_CONTEXT'):
+        click.echo("[TIP ] Set DOMAIN_CONTEXT in .env (e.g. 'a webMethods MFT support "
+                   "Slack channel') — it makes AI topic names noticeably sharper")
 
     try:
         cache_dir = Path(os.getenv('EMBEDDING_CACHE_DIR', '.embedding_cache'))

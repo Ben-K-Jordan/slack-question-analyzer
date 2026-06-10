@@ -97,6 +97,15 @@ def test_latest_analysis_404_when_empty(client):
     assert client.get('/api/analyses/latest').status_code == 404
 
 
+def test_saved_analyses_are_pruned_to_cap(client, fake_engine, monkeypatch):
+    monkeypatch.setenv('MAX_SAVED_ANALYSES', '2')
+    for _ in range(3):
+        job_id = client.post('/api/analyze',
+                             json={'content': SAMPLE_CONTENT}).get_json()['job_id']
+        wait_for_job(client, job_id)
+    assert len(client.get('/api/analyses').get_json()['analyses']) == 2
+
+
 def test_export_analysis(client, fake_engine):
     job_id = client.post('/api/analyze', json={'content': SAMPLE_CONTENT}).get_json()['job_id']
     analysis_id = wait_for_job(client, job_id)['analysis_id']

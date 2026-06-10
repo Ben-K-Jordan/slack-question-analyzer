@@ -37,7 +37,8 @@ class EmbeddingCache(JsonDiskCache):
     def __init__(self, provider: str, model: str, cache_dir: Optional[str] = None,
                  enabled: bool = True):
         cache_dir = cache_dir or os.getenv('EMBEDDING_CACHE_DIR', '.embedding_cache')
-        super().__init__(provider, model, cache_dir, enabled=enabled)
+        super().__init__(provider, model, cache_dir, enabled=enabled,
+                         max_entries=int(os.getenv('EMBEDDING_CACHE_MAX', '20000')))
 
 
 class SimilarityAnalyzer:

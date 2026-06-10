@@ -264,6 +264,16 @@ def _save_analysis(results):
     path = ANALYSES_DIR / f"{analysis_id}.json"
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(results, f, ensure_ascii=False)
+
+    # Keep history bounded: prune the oldest beyond MAX_SAVED_ANALYSES (0 = keep all)
+    keep = int(os.getenv('MAX_SAVED_ANALYSES', '200'))
+    if keep > 0:
+        saved = sorted(ANALYSES_DIR.glob('*.json'))
+        for stale in saved[:-keep]:
+            try:
+                stale.unlink()
+            except OSError:
+                pass
     return analysis_id
 
 
