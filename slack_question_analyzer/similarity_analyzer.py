@@ -505,7 +505,15 @@ class SimilarityAnalyzer:
         }
 
     def _cluster_buckets(self, n: int, similarity_matrix) -> List[List[int]]:
-        """Greedy clustering of bucket indices by the similarity threshold."""
+        """
+        Greedy average-link clustering of bucket indices.
+
+        A question joins a group only when its AVERAGE similarity to every
+        existing member clears the threshold — not just its best match.
+        Single-link (max) chaining merges everything in domain-homogeneous
+        corpora (every question mentions the same product), producing one
+        giant mixed group; average-link keeps clusters tight.
+        """
         clusters = []
         assigned = set()
 
@@ -520,8 +528,9 @@ class SimilarityAnalyzer:
                 if j in assigned:
                     continue
 
-                max_similarity = max(similarity_matrix[j][idx] for idx in group_indices)
-                if max_similarity >= self.similarity_threshold:
+                avg_similarity = float(np.mean(
+                    [similarity_matrix[j][idx] for idx in group_indices]))
+                if avg_similarity >= self.similarity_threshold:
                     group_indices.append(j)
                     assigned.add(j)
 
@@ -532,8 +541,9 @@ class SimilarityAnalyzer:
     def _merge_borderline_clusters(self, clusters: List[List[int]], similarity_matrix,
                                    buckets: List[List[Dict]], verifier) -> List[List[int]]:
         """
-        Ask the verifier about cluster pairs whose best cross-similarity falls
-        just below the threshold — the zone where embeddings are unreliable.
+        Ask the verifier about cluster pairs whose best cross-similarity is
+        near or above the threshold — pairs that average-link kept apart but
+        might genuinely belong together (the LLM decides).
         """
         margin = float(os.getenv('LLM_VERIFY_MARGIN', '0.03'))
         max_checks = int(os.getenv('LLM_VERIFY_MAX', '10'))
@@ -543,7 +553,7 @@ class SimilarityAnalyzer:
             for b in range(a + 1, len(clusters)):
                 best = max(similarity_matrix[i][j]
                            for i in clusters[a] for j in clusters[b])
-                if self.similarity_threshold - margin <= best < self.similarity_threshold:
+                if best >= self.similarity_threshold - margin:
                     candidates.append((best, a, b))
         candidates.sort(reverse=True)
         candidates = candidates[:max_checks]
