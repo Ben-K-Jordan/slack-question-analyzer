@@ -185,6 +185,21 @@ AUDIT_SYSTEM = (
     "Respond with JSON only."
 )
 
+ROUTE_SCHEMA = {
+    'type': 'object',
+    'properties': {'category': {'type': 'integer'}},
+    'required': ['category'],
+}
+
+# The simplest possible task for a small model: a closed set, one item,
+# one number, no inventing. Used only for questions whose top-2 anchor
+# similarities are too close for embeddings to decide alone.
+ROUTE_SYSTEM = (
+    "You sort one support question into exactly one category. Reply with only "
+    "the category number. If unsure, pick the closest; never invent a new "
+    "number.\nRespond with JSON only: {\"category\": <number>}"
+)
+
 THEMES_SYSTEM = (
     "You organize support-question topics into broad themes for an executive "
     "funnel view. Produce 3 to 6 themes with short names (1-3 words, e.g. "
@@ -575,6 +590,25 @@ class GroupLabeler:
         if len(outliers) >= len(sample):
             return None
         return outliers
+
+    def choose_bucket(self, question: str,
+                      candidates: List[Dict]) -> Optional[int]:
+        """
+        Closed-choice adjudication for an ambiguously routed question.
+        candidates: [{'id': int, 'name': str}]. Returns the chosen id, or
+        None on failure/invalid answer (callers fall back to the embedding
+        favorite).
+        """
+        listing = '\n'.join(f"{c['id']} {c['name']}" for c in candidates)
+        user = f"Categories:\n{listing}\nQuestion: {question}\nCategory number:"
+        data = self._generate_json(self._system(ROUTE_SYSTEM), user, ROUTE_SCHEMA,
+                                   max_tokens=20)
+        if data is None:
+            return None
+        chosen = data.get('category')
+        if isinstance(chosen, int) and any(c['id'] == chosen for c in candidates):
+            return chosen
+        return None
 
     def assign_themes(self, items: List[str]) -> Optional[List[Optional[str]]]:
         """

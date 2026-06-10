@@ -312,7 +312,11 @@ function DashboardView({ onUpload }) {
             <ul style={{ listStyle: 'none', margin: '12px 0 0', padding: 0, borderLeft: '1px solid var(--border-subtle)' }}>
               {uniqueQuestions.map((q, i) => (
                 <li key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 16, padding: '8px 16px' }}>
-                  <span style={{ fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>{q.text}</span>
+                  <span style={{ fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                    {q.theme ? <span title="Theme this question falls under" style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--text-helper)', background: 'var(--gray-10)', padding: '1px 7px', marginRight: 8, whiteSpace: 'nowrap' }}>{q.theme}</span> : null}
+                    {q.needs_review ? <span title="Didn't fit any known category — a recurring pile of these means a new category is being born" style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: '#8a6116', background: '#fcf4d6', padding: '1px 7px', marginRight: 8, whiteSpace: 'nowrap' }}>needs review</span> : null}
+                    {q.text}
+                  </span>
                   {q.date && q.date !== 'Unknown' ? <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-placeholder)', whiteSpace: 'nowrap' }}>{q.date}</span> : null}
                 </li>
               ))}
