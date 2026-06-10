@@ -53,7 +53,20 @@ ollama pull nomic-embed-text
 ollama pull llama3.2
 Write-Host "[OK] Models ready"
 
-# 5. Launch — the dashboard opens in your browser automatically
+# 5. Desktop shortcut for daily use (best-effort)
+try {
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut(
+        [IO.Path]::Combine([Environment]::GetFolderPath('Desktop'), 'Slack Question Analyzer.lnk'))
+    $shortcut.TargetPath = Join-Path $PSScriptRoot 'start.bat'
+    $shortcut.WorkingDirectory = $PSScriptRoot
+    $shortcut.Save()
+    Write-Host "[OK] Desktop shortcut created ('Slack Question Analyzer')"
+} catch {
+    Write-Host "[skip] Could not create a desktop shortcut (use start.bat instead)"
+}
+
+# 6. Launch — the dashboard opens in your browser automatically
 Write-Host ""
 Write-Host "Starting the analyzer at http://localhost:5000 ..." -ForegroundColor Green
 python api_server.py

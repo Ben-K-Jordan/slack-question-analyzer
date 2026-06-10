@@ -47,6 +47,24 @@ function DashboardView() {
     }
   };
 
+  // Renaming updates the learned bank (future analyses) and the current view
+  const renameTopic = async (topicId, newName) => {
+    try {
+      await window.QA_API.renameTopic(topicId, newName);
+    } catch (err) {
+      alert('Rename failed: ' + err.message);
+      return;
+    }
+    if (window.ANALYSIS_RESULTS && window.ANALYSIS_RESULTS.groups) {
+      window.ANALYSIS_RESULTS = {
+        ...window.ANALYSIS_RESULTS,
+        groups: window.ANALYSIS_RESULTS.groups.map((g) =>
+          g.topic_id === topicId ? { ...g, topic: newName } : g),
+      };
+      setAnalysisResults(window.ANALYSIS_RESULTS);
+    }
+  };
+
   // Models the banner should offer to download (Ollama reachable but missing)
   const missingModels = [];
   if (setupHealth && setupHealth.ollama && setupHealth.ollama.reachable) {
@@ -212,7 +230,9 @@ function DashboardView() {
         {groups.slice(0, visibleCount).map((g, i) => (
           <RankedRow key={g.rank} rank={g.rank} index={i} question={g.question} count={g.count}
             maxCount={max} keywords={g.keywords} similarity={g.similarity} questions={g.questions}
-            topic={g.topic} summary={g.summary} seenIn={g.seenIn} defaultOpen={i === 0 && !query} />
+            topic={g.topic} summary={g.summary} seenIn={g.seenIn}
+            onRenameTopic={g.topicId ? (name) => renameTopic(g.topicId, name) : null}
+            defaultOpen={i === 0 && !query} />
         ))}
         {groups.length === 0 ? <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-helper)', borderBottom: '1px solid var(--border-subtle)' }}>No topics match “{query}”.</div> : null}
       </div>
@@ -283,6 +303,7 @@ function transformAnalysisResults(results) {
       topic: g.topic || null,
       summary: g.summary || null,
       seenIn: g.seen_in_analyses || 0,
+      topicId: g.topic_id || null,
       question: g.representative_question,
       keywords: g.keywords || [],
       questions: g.questions || []

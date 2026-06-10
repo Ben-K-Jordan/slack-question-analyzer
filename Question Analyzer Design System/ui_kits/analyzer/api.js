@@ -112,6 +112,19 @@
     }
   }
 
+  // Rename a learned topic in the bank (fixes a bad name for good).
+  async function renameTopic(topicId, newName) {
+    const response = await fetch(`${API_BASE}/api/topics/${encodeURIComponent(topicId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topic: newName }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.success === false) {
+      throw new Error(data.error || `Rename failed (${response.status})`);
+    }
+  }
+
   // Start downloading a missing Ollama model server-side.
   async function pullModel(model) {
     const response = await fetch(`${API_BASE}/api/models/pull`, {
@@ -138,7 +151,8 @@
   }
 
   window.QA_API = { API_BASE, health, latestAnalysis, listAnalyses, getAnalysis,
-    deleteAnalysis, exportUrl, latestWeekly, analyze, cancelJob, pullModel, pullStatus };
+    deleteAnalysis, exportUrl, latestWeekly, analyze, cancelJob, pullModel, pullStatus,
+    renameTopic };
 
   // ---- Analysis settings (provider + threshold), persisted locally ----
   const SETTINGS_KEY = 'qa-analysis-settings';

@@ -3,5 +3,10 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def isolated_topic_bank(tmp_path, monkeypatch):
-    """Every test gets its own topic bank — never the repo's real one."""
+    """Every test gets its own topic bank — never the repo's real one.
+
+    Seeding is pointed at a nonexistent file so tests with mocked embedding
+    providers don't try to embed the 150 real seed questions.
+    """
     monkeypatch.setenv('TOPIC_BANK_PATH', str(tmp_path / 'topic_bank.json'))
+    monkeypatch.setenv('SEED_TOPICS_PATH', str(tmp_path / 'no_seeds.json'))
