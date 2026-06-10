@@ -47,10 +47,20 @@ try {
 }
 Write-Host "[OK] Ollama running"
 
-# 4. Pull the models (idempotent; skips anything already downloaded)
-Write-Host "Downloading models (first time only: ~270MB + ~2GB)..."
+# 4. Pull the models (idempotent; skips anything already downloaded).
+# Chat model is sized to the machine: 8B on >=12GB RAM, 3B otherwise.
+$ramGB = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
+if ($ramGB -ge 12) {
+    $chatModel = "llama3.1:8b"
+    Write-Host "Detected ${ramGB}GB RAM - using the larger chat model for better topic names."
+    Write-Host "Downloading models (first time only: ~270MB + ~5GB)..."
+} else {
+    $chatModel = "llama3.2"
+    Write-Host "Detected ${ramGB}GB RAM - using the compact chat model."
+    Write-Host "Downloading models (first time only: ~270MB + ~2GB)..."
+}
 ollama pull nomic-embed-text
-ollama pull llama3.2
+ollama pull $chatModel
 Write-Host "[OK] Models ready"
 
 # 5. Desktop shortcut for daily use (best-effort)

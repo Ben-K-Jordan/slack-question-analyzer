@@ -25,6 +25,7 @@ import requests
 from dotenv import load_dotenv
 
 from .disk_cache import JsonDiskCache
+from .model_defaults import default_generation_model, FALLBACK_GENERATION_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -220,7 +221,8 @@ class GroupLabeler:
 
         if provider == 'ollama':
             self.ollama_url = os.getenv('OLLAMA_URL', 'http://localhost:11434').rstrip('/')
-            self.model = os.getenv('OLLAMA_GENERATION_MODEL', 'llama3.2')
+            self.model = default_generation_model()
+            self._model_pinned = bool(os.getenv('OLLAMA_GENERATION_MODEL'))
         elif provider == 'azure':
             self.model = os.getenv('AZURE_OPENAI_CHAT_DEPLOYMENT')  # opt-in only
         else:  # openai
@@ -260,7 +262,24 @@ class GroupLabeler:
                 response = requests.get(f"{self.ollama_url}/api/tags", timeout=2)
                 response.raise_for_status()
                 names = [m.get('name', '') for m in response.json().get('models', [])]
-                return any(n == self.model or n.startswith(f"{self.model}:") for n in names)
+                def downloaded(model):
+                    return any(n == model or n.startswith(f"{model}:") for n in names)
+                if downloaded(self.model):
+                    return True
+                # Preferred model not downloaded: quietly drop to the small one
+                # rather than losing all LLM features (env-pinned models never switch)
+                if (not self._model_pinned and self.model != FALLBACK_GENERATION_MODEL
+                        and downloaded(FALLBACK_GENERATION_MODEL)):
+                    logger.info("Chat model '%s' not downloaded; using '%s' instead",
+                                self.model, FALLBACK_GENERATION_MODEL)
+                    self.model = FALLBACK_GENERATION_MODEL
+                    self._cache = JsonDiskCache(
+                        self.provider, self.model,
+                        os.getenv('LLM_CACHE_DIR', '.llm_cache'),
+                        enabled=self._cache.enabled,
+                        max_entries=int(os.getenv('LLM_CACHE_MAX', '5000')))
+                    return True
+                return False
             except (requests.RequestException, ValueError):
                 return False
         if self.provider == 'azure':

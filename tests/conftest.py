@@ -10,3 +10,11 @@ def isolated_topic_bank(tmp_path, monkeypatch):
     """
     monkeypatch.setenv('TOPIC_BANK_PATH', str(tmp_path / 'topic_bank.json'))
     monkeypatch.setenv('SEED_TOPICS_PATH', str(tmp_path / 'no_seeds.json'))
+
+
+@pytest.fixture(autouse=True)
+def pinned_generation_model(monkeypatch):
+    """The default chat model depends on the host's RAM — pin it so tests
+    behave identically on every machine. Tests of the sizing logic itself
+    delete this env var."""
+    monkeypatch.setenv('OLLAMA_GENERATION_MODEL', 'llama3.2')

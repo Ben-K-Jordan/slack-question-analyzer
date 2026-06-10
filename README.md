@@ -225,10 +225,12 @@ date,message
 ## LLM Features
 
 When a generation model is available, the pipeline uses it for five optional passes.
-With Ollama:
+The default chat model is sized to your machine: `llama3.1:8b` (better topic names
+and verification) on machines with 12GB+ RAM, `llama3.2` (3B, ~2GB) on smaller ones.
+If only the small model is downloaded, the app quietly uses it. With Ollama:
 
 ```bash
-ollama pull llama3.2
+ollama pull llama3.1:8b   # or llama3.2 on machines with less RAM
 ```
 
 | Feature | What it does | Switch (in `.env`) |
@@ -243,8 +245,9 @@ Each switch accepts `auto` (default: run when the model is available), `on`, or 
 `GROUP_LABELS=off` (or `--no-labels` on the CLI) disables all LLM features at once.
 
 ```env
-# Ollama chat model used for all LLM features (default: llama3.2)
-OLLAMA_GENERATION_MODEL=llama3.2
+# Ollama chat model for all LLM features. Default is automatic:
+# llama3.1:8b with >=12GB RAM, llama3.2 otherwise. Set to pin a model.
+# OLLAMA_GENERATION_MODEL=llama3.1:8b
 # For openai provider: CHAT_MODEL (default gpt-4o-mini)
 # For azure provider: AZURE_OPENAI_CHAT_DEPLOYMENT (LLM features off unless set)
 
