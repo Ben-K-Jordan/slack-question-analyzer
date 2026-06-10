@@ -8,6 +8,8 @@ from slack_question_analyzer.similarity_analyzer import SimilarityAnalyzer, Embe
 
 def make_analyzer(monkeypatch, threshold='0.85'):
     monkeypatch.setenv('SIMILARITY_THRESHOLD', threshold)
+    # A model without a task prefix, so fakes can match on raw text
+    monkeypatch.setenv('OLLAMA_MODEL', 'test-embed')
     return SimilarityAnalyzer(provider='ollama', use_disk_cache=False)
 
 
@@ -223,6 +225,44 @@ def test_large_corpus_uses_leader_clustering(monkeypatch):
     assert groups[1]['count'] == 1
     assert 0.0 < groups[0]['avg_similarity'] <= 1.0
     assert groups[1]['avg_similarity'] == 1.0
+
+
+def test_nomic_model_gets_clustering_prefix(monkeypatch):
+    """nomic-embed-text is trained with task prefixes; we must send one."""
+    monkeypatch.setenv('SIMILARITY_THRESHOLD', '0.85')
+    monkeypatch.setenv('OLLAMA_MODEL', 'nomic-embed-text')
+    analyzer = SimilarityAnalyzer(provider='ollama', use_disk_cache=False)
+    assert analyzer.embed_prefix == 'clustering: '
+
+    sent = []
+    monkeypatch.setattr(analyzer, '_ollama_embedding',
+                        lambda text: sent.append(text) or [1.0, 0.0])
+    analyzer.get_embeddings_batch(['how do i reset my password?'])
+    assert sent == ['clustering: how do i reset my password?']
+
+
+def test_other_models_get_no_prefix(monkeypatch):
+    monkeypatch.setenv('SIMILARITY_THRESHOLD', '0.85')
+    monkeypatch.setenv('OLLAMA_MODEL', 'mxbai-embed-large')
+    analyzer = SimilarityAnalyzer(provider='ollama', use_disk_cache=False)
+    assert analyzer.embed_prefix == ''
+
+
+def test_similarity_stats_recorded(monkeypatch):
+    analyzer = make_analyzer(monkeypatch)
+    fake = np.array([[1.0, 0.0], [0.6, 0.8], [0.0, 1.0]])
+    monkeypatch.setattr(analyzer, 'get_embeddings_batch',
+                        lambda texts, progress_callback=None: fake)
+
+    questions = [question('a much longer question one?'),
+                 question('another quite different two?'),
+                 question('completely unrelated three?')]
+    analyzer.group_similar_questions(questions)
+
+    stats = analyzer.last_similarity_stats
+    assert stats is not None
+    assert stats['max'] == 0.8  # best pair: [0.6,0.8] vs [0,1]
+    assert 0.0 <= stats['median'] <= stats['p90'] <= stats['max']
 
 
 def test_embedding_cache_roundtrip(tmp_path):

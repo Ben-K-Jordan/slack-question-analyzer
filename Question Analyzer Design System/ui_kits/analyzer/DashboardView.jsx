@@ -95,6 +95,18 @@ function DashboardView() {
         </div>
       </Reveal>
 
+      {d.thresholdHint ? (
+        <Reveal delay={110}>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: '16px 24px', background: '#fff', border: '1px solid var(--border-subtle)', borderLeft: '3px solid var(--yellow-40, #f1c21b)', marginBottom: 32 }}>
+            <span style={{ color: 'var(--text-secondary)', flex: '0 0 auto', marginTop: 1 }}><Icon name="sliders-horizontal" size={16} /></span>
+            <span style={{ fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+              No questions grouped at threshold <b>{Math.round(d.thresholdHint.threshold * 100)}%</b> — your most similar pair scored <b>{Math.round(d.thresholdHint.max * 100)}%</b> (similarity scales vary by embedding model).
+              Open <b>Settings</b> (gear icon), set the threshold to about <b>{Math.round(d.thresholdHint.suggestion * 100)}%</b>, and re-upload — cached embeddings make the re-run fast.
+            </span>
+          </div>
+        </Reveal>
+      ) : null}
+
       {d.executiveSummary ? (
         <Reveal delay={120}>
           <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: '16px 24px', background: '#fff', border: '1px solid var(--border-subtle)', borderLeft: '3px solid var(--purple-60)', marginBottom: 32 }}>
@@ -152,6 +164,18 @@ function DashboardView() {
 }
 window.DashboardView = DashboardView;
 
+// Suggest a workable threshold when nothing grouped (mirrors the backend's
+// QuestionAnalyzer.suggested_threshold logic).
+function thresholdHint(results) {
+  const stats = results.metadata && results.metadata.similarity_stats;
+  if (!stats || (results.total_groups || 0) > 0) return null;
+  const threshold = results.metadata.similarity_threshold;
+  if (stats.max >= threshold) return null;
+  const suggestion = Math.round((stats.max - 0.02) * 100) / 100;
+  if (suggestion <= 0 || suggestion >= threshold) return null;
+  return { threshold, max: stats.max, suggestion };
+}
+
 // Transform API results to dashboard format
 function transformAnalysisResults(results) {
   if (!results || !results.groups) return window.DASHBOARD_DATA;
@@ -163,6 +187,7 @@ function transformAnalysisResults(results) {
     resolved: results.answered_questions || 0, // LLM answer detection (threads only)
     executiveSummary: results.executive_summary || null,
     ungrouped: results.ungrouped_questions || [],
+    thresholdHint: thresholdHint(results),
     topTopic: results.groups[0] ? (results.groups[0].topic || fallbackTopic(results.groups[0])) : 'N/A',
     groups: results.groups.map((g, i) => ({
       rank: i + 1,
