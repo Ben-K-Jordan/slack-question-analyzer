@@ -113,13 +113,6 @@ Check if your input file is formatted correctly:
 python -m src.cli validate example_input.txt
 ```
 
-## Running Tests
-
-```bash
-pip install pytest
-python -m pytest tests/
-```
-
 ## Input Format
 
 The tool expects Slack content in the following format:
@@ -229,9 +222,42 @@ python -m src.cli analyze example_input.txt --provider azure
 python -m src.cli analyze example_input.txt --threshold 0.95
 ```
 
+## Web Dashboard
+
+A React dashboard (in `Question Analyzer Design System/ui_kits/analyzer/`) provides a visual
+front end on top of the same analysis engine.
+
+### Running the Full Stack
+
+1. **Start Ollama** (if not already running):
+   ```bash
+   ollama serve
+   ```
+2. **Start the Flask API server** (`run_api_server.bat` on Windows, or):
+   ```bash
+   python api_server.py
+   ```
+   The server runs at `http://localhost:5000`.
+3. **Open the UI** in your browser:
+   ```
+   Question Analyzer Design System/ui_kits/analyzer/index.html
+   ```
+   Upload a transcript via the upload modal; results appear in the dashboard.
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/health` | GET | Health check |
+| `/api/analyze` | POST | Analyze a transcript. Body: `{"content": "...", "provider": "ollama", "threshold": 0.85}` |
+| `/api/config` | GET | Current provider/threshold configuration |
+
+The `/api/analyze` response wraps the same JSON structure shown in [Output Format](#output-format)
+as `{"success": true, "data": {...}}`.
+
 ## Troubleshooting
 
-### Ollama Connection Error
+### Ollama Connection Error ("connection refused")
 
 Make sure Ollama is running:
 ```bash
@@ -240,9 +266,32 @@ ollama serve
 
 ### Model Not Found
 
-Pull the required model:
+Pull the required model (about 274MB, one time only):
 ```bash
 ollama pull nomic-embed-text
+```
+
+### Port 11434 Already in Use
+
+Run Ollama on another port and update `.env` to match:
+```bash
+OLLAMA_HOST=0.0.0.0:11435 ollama serve
+```
+```env
+OLLAMA_URL=http://localhost:11435
+```
+
+### Alternative Ollama Models
+
+Set `OLLAMA_MODEL` in `.env` (and `ollama pull` it first):
+- `nomic-embed-text` — recommended (274MB)
+- `all-minilm` — smaller and faster (45MB), less accurate
+- `mxbai-embed-large` — larger (670MB), more accurate
+
+### Import Errors
+
+```bash
+pip install -r requirements.txt
 ```
 
 ### API Key Errors
@@ -262,19 +311,24 @@ slack-question-analyzer/
 │   ├── analyzer.py         # Main analysis orchestration
 │   ├── question_extractor.py  # Question parsing logic
 │   └── similarity_analyzer.py # AI embedding & grouping
+├── tests/                  # pytest suite
+├── api_server.py           # Flask API for the web dashboard
+├── run_api_server.bat      # Windows launcher for the API server
+├── Question Analyzer Design System/  # React dashboard + design system
 ├── example_input.txt       # Sample input file
 ├── requirements.txt        # Python dependencies
-├── .env.example           # Configuration template
+├── .env.example            # Configuration template
 └── README.md
 ```
 
 ### Running Tests
 
 ```bash
-# Validate input format
-python -m src.cli validate example_input.txt
+# Run the test suite (no Ollama required — embeddings are mocked)
+python -m pytest tests/
 
-# Run analysis on example
+# Manual smoke test
+python -m src.cli validate example_input.txt
 python -m src.cli analyze example_input.txt
 ```
 
