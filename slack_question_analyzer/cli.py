@@ -84,18 +84,18 @@ def analyze(input_files, output, provider, threshold, no_summary, no_cache, no_l
 def setup():
     """
     Setup wizard to configure the analyzer.
-    
+
     Creates a .env file with your preferred AI provider settings.
     """
     click.echo("=== Slack Question Analyzer Setup ===\n")
-    
+
     # Choose provider
     provider = click.prompt(
         'Choose AI provider',
         type=click.Choice(['ollama', 'azure', 'openai']),
         default='ollama'
     )
-    
+
     env_content = [
         f"AI_PROVIDER={provider}",
         "",
@@ -103,7 +103,7 @@ def setup():
         "SIMILARITY_THRESHOLD=0.85",
         ""
     ]
-    
+
     if provider == 'ollama':
         click.echo("\nOllama Configuration (Local & Free)")
         ollama_url = click.prompt('Ollama URL', default='http://localhost:11434')
@@ -165,12 +165,12 @@ def setup():
         "LLM_ANSWER_DETECTION=auto",
         "EXECUTIVE_SUMMARY=auto",
     ])
-    
+
     # Write .env file (UTF-8 explicitly: Windows defaults to a legacy codepage)
     env_path = Path('.env')
     with open(env_path, 'w', encoding='utf-8') as f:
         f.write('\n'.join(env_content))
-    
+
     click.echo(f"\nConfiguration saved to {env_path}")
     click.echo("\nYou're all set! Run 'slack-analyzer analyze <input_file>' to start analyzing.")
 
@@ -180,7 +180,7 @@ def setup():
 def validate(input_file):
     """
     Validate input file format and show statistics.
-    
+
     INPUT_FILE: Path to file containing Slack messages/questions
     """
     try:
@@ -192,16 +192,16 @@ def validate(input_file):
         questions = []
         for content in load_input_files([input_file]):
             questions.extend(extractor.parse_slack_content(content))
-        
+
         click.echo("File is valid!")
         click.echo("\nStatistics:")
         click.echo(f"  Total questions found: {len(questions)}")
-        
+
         if questions:
             click.echo("\nSample questions:")
             for i, q in enumerate(questions[:5], 1):
                 click.echo(f"  {i}. {q['text'][:80]}...")
-        
+
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
