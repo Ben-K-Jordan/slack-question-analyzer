@@ -1,7 +1,7 @@
 // Animated, expandable ranked question row — shared by Dashboard & Week.
 function RankedRow({ rank, question, count, maxCount, keywords = [], movement = null,
   similarity = null, questions = null, index = 0, defaultOpen = false,
-  topic = null, summary = null, seenIn = 0 }) {
+  topic = null, summary = null, seenIn = 0, onRenameTopic = null }) {
   const [open, setOpen] = React.useState(defaultOpen);
   const [hover, setHover] = React.useState(false);
   const [shown, setShown] = React.useState(false);
@@ -38,6 +38,19 @@ function RankedRow({ rank, question, count, maxCount, keywords = [], movement = 
             <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.04em', textTransform: 'uppercase', color: heat, marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {topic}
               {seenIn > 1 ? <span title={`This topic has come up in ${seenIn} analyses`} style={{ marginLeft: 8, fontWeight: 500, textTransform: 'none', letterSpacing: 0, color: 'var(--text-helper)', background: 'var(--gray-10)', padding: '1px 7px', fontFamily: 'var(--font-mono)', fontSize: 10.5 }}>recurring ×{seenIn}</span> : null}
+              {onRenameTopic ? (
+                <button title="Rename this topic (updates the learned bank)" aria-label="Rename topic"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const name = window.prompt('Rename this topic:', topic);
+                    if (name && name.trim() && name.trim() !== topic) onRenameTopic(name.trim());
+                  }}
+                  style={{ marginLeft: 6, background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-helper)', padding: 0, verticalAlign: 'middle', display: 'inline-flex' }}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--blue-60)'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-helper)'; }}>
+                  <Icon name="pencil" size={11} />
+                </button>
+              ) : null}
             </div>
           ) : null}
           <div style={{ fontSize: 15, color: 'var(--text-primary)', lineHeight: 1.3, whiteSpace: open ? 'normal' : 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{question}</div>

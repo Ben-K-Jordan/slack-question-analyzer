@@ -20,7 +20,10 @@ AI-powered tool that analyzes Slack questions, groups similar ones together, and
 - **Learns Over Time**: A persistent topic bank remembers groups across analyses —
   recurring topics keep their established names (no relabeling drift), skip redundant
   LLM calls, show a "recurring ×N" badge, and accumulate history (`GET /api/topics`;
-  disable with `TOPIC_BANK=off`)
+  disable with `TOPIC_BANK=off`). It starts smart: on first run the bank is seeded
+  from `seed_topics.json` (150 curated MFT topics — edit the file to fit your domain),
+  and any topic can be renamed via the pencil icon next to its label (fixes a bad
+  name for good)
 - **Keyword Extraction**: Identifies key topics in each question group
 - **Date Tracking**: Shows when each question group was first and last asked
 - **Persistent Embedding Cache**: Embeddings are cached on disk (`.embedding_cache/`), so re-running an analysis is near-instant and never pays for the same API call twice

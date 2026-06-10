@@ -10,6 +10,7 @@ skip redundant LLM labeling, and accumulate history ("seen in N analyses").
 import os
 import json
 import time
+import uuid
 import logging
 import tempfile
 from pathlib import Path
@@ -37,6 +38,8 @@ class TopicBank:
             except (json.JSONDecodeError, OSError):
                 logger.warning("Topic bank at %s is unreadable; starting fresh", self.path)
                 self.entries = []
+            for entry in self.entries:  # banks from before ids existed
+                entry.setdefault('id', uuid.uuid4().hex)
 
     @staticmethod
     def _unit(vector) -> Optional[np.ndarray]:
@@ -84,6 +87,7 @@ class TopicBank:
             return matched
 
         entry = {
+            'id': uuid.uuid4().hex,
             'topic': group.get('topic'),
             'summary': group.get('summary'),
             'representative_question': group['representative_question'],
@@ -96,6 +100,15 @@ class TopicBank:
         }
         self.entries.append(entry)
         return entry
+
+    def rename(self, topic_id: str, new_name: str) -> bool:
+        """Rename a topic (the fix for a bad name sticking forever)."""
+        for entry in self.entries:
+            if entry.get('id') == topic_id:
+                entry['topic'] = new_name
+                self.save()
+                return True
+        return False
 
     def save(self):
         """Persist the bank (atomic write; best-effort)."""
