@@ -383,6 +383,19 @@ def _contents_from_upload():
     return contents
 
 
+@app.route('/api/topics', methods=['GET'])
+def list_topics():
+    """The learned topic bank: known topics accumulated across analyses."""
+    from slack_question_analyzer.topic_bank import TopicBank
+    bank = TopicBank()
+    fields = ('topic', 'summary', 'representative_question', 'keywords',
+              'question_count', 'analysis_count', 'first_seen', 'last_seen')
+    topics = [{key: entry.get(key) for key in fields}
+              for entry in sorted(bank.entries,
+                                  key=lambda e: e.get('question_count', 0), reverse=True)]
+    return jsonify({'success': True, 'topics': topics})
+
+
 # ---------------------------------------------------------------------------
 # Model management: pull missing Ollama models from the dashboard, so new
 # users never have to run 'ollama pull' by hand

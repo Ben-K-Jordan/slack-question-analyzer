@@ -17,6 +17,10 @@ AI-powered tool that analyzes Slack questions, groups similar ones together, and
   - **Azure OpenAI** (Copilot integration)
   - **Standard OpenAI**
 - **Ranked Results**: Groups questions by frequency with similarity scores
+- **Learns Over Time**: A persistent topic bank remembers groups across analyses —
+  recurring topics keep their established names (no relabeling drift), skip redundant
+  LLM calls, show a "recurring ×N" badge, and accumulate history (`GET /api/topics`;
+  disable with `TOPIC_BANK=off`)
 - **Keyword Extraction**: Identifies key topics in each question group
 - **Date Tracking**: Shows when each question group was first and last asked
 - **Persistent Embedding Cache**: Embeddings are cached on disk (`.embedding_cache/`), so re-running an analysis is near-instant and never pays for the same API call twice
@@ -26,18 +30,12 @@ AI-powered tool that analyzes Slack questions, groups similar ones together, and
 
 ## Quick Start (give this to a teammate)
 
-Clone the repo, then run the setup script for your platform — it checks Python,
-installs everything, downloads the AI models, and opens the dashboard:
+Clone the repo, then run the setup for your platform — it checks Python, installs
+everything, downloads the AI models, and opens the dashboard:
 
-```powershell
-# Windows (PowerShell)
-powershell -ExecutionPolicy Bypass -File setup.ps1
-```
-
-```bash
-# macOS / Linux
-./setup.sh
-```
+- **Windows:** double-click **`setup.bat`** (afterwards, `start.bat` starts the app)
+- **macOS / Linux:** run **`./setup.sh`** (afterwards, double-click `start.command`
+  on a Mac, or run `python3 api_server.py`)
 
 The only manual prerequisite is [Ollama](https://ollama.com/download) — if it isn't
 installed, the script says so and where to get it. After setup, starting the app is
@@ -402,6 +400,8 @@ of a full n×n similarity matrix, and the dashboard paginates long topic lists.
 | `/api/analyses/<id>/export` | GET | Download as `?format=md`, `csv`, or `json` |
 | `/api/analyses/latest/weekly` | GET | Week-in-Review stats for the most recent analysis |
 | `/api/analyses/<id>/weekly` | GET | Week-in-Review stats for a specific analysis |
+| `/api/topics` | GET | The learned topic bank (topics accumulated across analyses) |
+| `/api/models/pull` | POST | Download a missing Ollama model (`{"model": "..."}`); progress at `GET /api/models/pull/<model>` |
 | `/api/config` | GET | Current provider/threshold configuration |
 
 A finished job's `data` field contains the same JSON structure shown in
