@@ -146,7 +146,8 @@ DETECT_SYSTEM = (
     "question words or question marks (for example: 'I can't get the webhook to work, "
     "been stuck all day' is a request for help).\n"
     "For each message that asks for help or information, rewrite it as a clear, short "
-    "question. Skip statements, status updates, and answers.\n"
+    "question. Skip statements, status updates, and answers. Messages may be in any "
+    "language: keep the rewritten question in its original language.\n"
     "Respond with JSON only: {\"questions\": [{\"index\": <message number>, "
     "\"question\": \"<the rewritten question>\"}]}. Use an empty list if none qualify."
 )
@@ -162,6 +163,8 @@ EXTRACT_SYSTEM = (
     "repeating the message number.\n"
     "- Implicit help requests count.\n"
     "- Skip statements, status updates, headers, and answers.\n"
+    "- Messages may be in any language: keep the rewritten question in its "
+    "original language.\n"
     "Respond with JSON only: {\"questions\": [{\"index\": <message number>, "
     "\"question\": \"<the question>\"}]}. Use an empty list if none qualify."
 )
@@ -216,7 +219,8 @@ class GroupLabeler:
         cache_enabled = os.getenv('LLM_CACHE', 'on').lower() not in ('off', '0', 'false')
         self._cache = JsonDiskCache(provider, self.model or 'none',
                                     os.getenv('LLM_CACHE_DIR', '.llm_cache'),
-                                    enabled=cache_enabled)
+                                    enabled=cache_enabled,
+                                    max_entries=int(os.getenv('LLM_CACHE_MAX', '5000')))
 
         # Optional domain hint injected into every prompt: knowing the product
         # makes small models dramatically more specific

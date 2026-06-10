@@ -32,6 +32,7 @@ class TopicBank:
         self.model = model  # embedding model: entries only match their own model
         self.path = Path(path or os.getenv('TOPIC_BANK_PATH', 'topic_bank.json'))
         self.entries: List[Dict] = []
+        self._deleted_ids = set()  # tombstones so merge-on-save keeps deletes
 
         if self.enabled and self.path.exists():
             try:
@@ -126,6 +127,7 @@ class TopicBank:
         if entry is None:
             return False
         self.entries.remove(entry)
+        self._deleted_ids.add(topic_id)
         self.save()
         return True
 
@@ -153,18 +155,37 @@ class TopicBank:
         target['last_seen'] = max(target.get('last_seen') or '',
                                   source.get('last_seen') or '') or target.get('last_seen')
         self.entries.remove(source)
+        self._deleted_ids.add(source_id)
         self.save()
         return True
 
     def save(self):
-        """Persist the bank (atomic write; best-effort)."""
+        """
+        Persist the bank (atomic write; best-effort). Entries added on disk by
+        another instance since we loaded are merged in (by id) rather than
+        overwritten; our own deletions are honored via tombstones.
+        """
         if not self.enabled:
             return
         try:
+            known = {e.get('id') for e in self.entries}
+            merged = list(self.entries)
+            if self.path.exists():
+                try:
+                    with open(self.path, 'r', encoding='utf-8') as f:
+                        for entry in json.load(f):
+                            eid = entry.get('id')
+                            if eid and eid not in known and eid not in self._deleted_ids:
+                                merged.append(entry)
+                                known.add(eid)
+                except (json.JSONDecodeError, OSError):
+                    pass
+
             self.path.parent.mkdir(parents=True, exist_ok=True)
             fd, tmp_path = tempfile.mkstemp(dir=self.path.parent, suffix='.tmp')
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                json.dump(self.entries, f, ensure_ascii=False)
+                json.dump(merged, f, ensure_ascii=False)
             os.replace(tmp_path, self.path)
+            self.entries = merged
         except OSError as e:
             logger.warning("Could not save topic bank: %s", e)

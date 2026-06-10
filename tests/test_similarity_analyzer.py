@@ -335,6 +335,35 @@ def test_embedding_cache_survives_corruption(tmp_path):
     assert reloaded.get('hello') is None  # starts fresh instead of crashing
 
 
+def test_concurrent_cache_instances_merge_on_save(tmp_path):
+    """Two instances saving to the same file keep each other's entries."""
+    first = EmbeddingCache('ollama', 'test-model', cache_dir=str(tmp_path))
+    second = EmbeddingCache('ollama', 'test-model', cache_dir=str(tmp_path))
+
+    first.set('alpha', [0.1])
+    first.save()
+    second.set('beta', [0.2])
+    second.save()  # must not clobber 'alpha' written after second loaded
+
+    reloaded = EmbeddingCache('ollama', 'test-model', cache_dir=str(tmp_path))
+    assert reloaded.get('alpha') == [0.1]
+    assert reloaded.get('beta') == [0.2]
+
+
+def test_cache_evicts_oldest_beyond_max_entries(tmp_path):
+    from slack_question_analyzer.disk_cache import JsonDiskCache
+    cache = JsonDiskCache('ollama', 'test-model', str(tmp_path), max_entries=2)
+    cache.set('one', [1])
+    cache.set('two', [2])
+    cache.set('three', [3])
+    cache.save()
+
+    reloaded = JsonDiskCache('ollama', 'test-model', str(tmp_path))
+    assert reloaded.get('one') is None  # oldest evicted
+    assert reloaded.get('two') == [2]
+    assert reloaded.get('three') == [3]
+
+
 def test_disabled_cache_does_not_write(tmp_path):
     cache = EmbeddingCache('ollama', 'test-model', cache_dir=str(tmp_path), enabled=False)
     cache.set('hello', [0.1])
