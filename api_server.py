@@ -726,8 +726,10 @@ def export_analysis(analysis_id):
 @app.route('/api/config', methods=['GET'])
 def get_config():
     """Get current configuration"""
+    from slack_question_analyzer import __version__
     return jsonify({
         'success': True,
+        'version': __version__,
         'config': {
             'provider': os.getenv('AI_PROVIDER', 'ollama'),
             'threshold': (float(os.getenv('SIMILARITY_THRESHOLD'))
