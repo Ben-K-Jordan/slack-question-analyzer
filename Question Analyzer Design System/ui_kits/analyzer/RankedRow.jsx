@@ -9,7 +9,9 @@ function RankedRow({ rank, question, count, maxCount, keywords = [], movement = 
   const [bodyH, setBodyH] = React.useState(0);
   const expandable = !!(questions && questions.length);
 
-  React.useEffect(() => { const id = setTimeout(() => setShown(true), 80 + index * 70); return () => clearTimeout(id); }, []);
+  // Cap the entrance stagger so long lists don't take seconds to appear
+  const stagger = Math.min(index, 12);
+  React.useEffect(() => { const id = setTimeout(() => setShown(true), 80 + stagger * 70); return () => clearTimeout(id); }, []);
   React.useEffect(() => { if (bodyRef.current) setBodyH(bodyRef.current.scrollHeight); }, [open, questions]);
 
   const heat = rank === 1 ? 'var(--blue-60)' : rank === 2 ? 'var(--blue-50)' : rank === 3 ? 'var(--blue-40)' : 'var(--gray-40)';
@@ -42,7 +44,7 @@ function RankedRow({ rank, question, count, maxCount, keywords = [], movement = 
             </div>
           ) : null}
         </span>
-        <Bar pct={pct} color={heat} height={8} delay={index * 70} duration={1000} />
+        <Bar pct={pct} color={heat} height={8} delay={stagger * 70} duration={1000} />
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 15, fontWeight: 500, textAlign: 'right', color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>{count}×</span>
         <span style={{ display: 'inline-flex', justifyContent: 'center', color: 'var(--text-secondary)', opacity: expandable ? 1 : 0, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform var(--duration-moderate) var(--ease-productive)' }}>
           <Icon name="chevron-down" size={16} />

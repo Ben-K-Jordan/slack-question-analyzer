@@ -55,6 +55,17 @@ def test_full_pipeline(analyzer):
     assert results['metadata']['provider'] == 'ollama'
 
 
+def test_analyze_contents_merges_multiple_files(analyzer):
+    """Messages from several files (e.g. a zipped export) form one corpus."""
+    file1 = json.dumps([{'text': 'How do I reset my password?', 'ts': '1704412800.0'}])
+    file2 = json.dumps([{'text': 'How can I reset my password?', 'ts': '1704672000.0'}])
+
+    results = analyzer.analyze_contents([file1, file2])
+    assert results['total_questions'] == 2
+    assert results['total_groups'] == 1  # grouped across file boundaries
+    assert results['groups'][0]['count'] == 2
+
+
 def test_empty_content(analyzer):
     results = analyzer.analyze_slack_content("")
     assert results['total_questions'] == 0

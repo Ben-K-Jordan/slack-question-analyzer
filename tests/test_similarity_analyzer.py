@@ -201,6 +201,30 @@ def test_clearly_different_groups_skip_the_verifier(monkeypatch):
     assert len(groups) == 2
 
 
+def test_large_corpus_uses_leader_clustering(monkeypatch):
+    """Above LARGE_CLUSTERING_THRESHOLD, grouping avoids the full n^2 matrix."""
+    analyzer = make_analyzer(monkeypatch)
+    monkeypatch.setenv('LARGE_CLUSTERING_THRESHOLD', '2')  # force the large path
+
+    fake = np.array([[1.0, 0.0], [1.0, 0.05], [0.0, 1.0]])
+    monkeypatch.setattr(analyzer, 'get_embeddings_batch',
+                        lambda texts, progress_callback=None: fake)
+
+    def never(a, b):
+        raise AssertionError('verifier must be skipped on the large path')
+
+    questions = [question('How do I reset my password?'),
+                 question('Steps to reset my password quickly?'),
+                 question('What is the deploy schedule?')]
+    groups = analyzer.group_similar_questions(questions, verifier=never)
+
+    assert len(groups) == 2
+    assert groups[0]['count'] == 2
+    assert groups[1]['count'] == 1
+    assert 0.0 < groups[0]['avg_similarity'] <= 1.0
+    assert groups[1]['avg_similarity'] == 1.0
+
+
 def test_embedding_cache_roundtrip(tmp_path):
     cache = EmbeddingCache('ollama', 'test-model', cache_dir=str(tmp_path))
     assert cache.get('hello') is None

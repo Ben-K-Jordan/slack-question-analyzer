@@ -400,21 +400,86 @@ class SimilarityAnalyzer:
         texts = [bucket[0]['normalized_text'] for bucket in buckets]
         embeddings = self.get_embeddings_batch(texts, progress_callback=progress_callback)
 
-        # Calculate similarity matrix between distinct questions
-        similarity_matrix = cosine_similarity(embeddings)
+        large_threshold = int(os.getenv('LARGE_CLUSTERING_THRESHOLD', '2000'))
+        if len(buckets) > large_threshold:
+            # Too many distinct questions for an n x n similarity matrix:
+            # use memory-safe leader clustering instead
+            logger.info("Large corpus (%d distinct questions): using leader "
+                        "clustering (no full similarity matrix)", len(buckets))
+            if verifier is not None:
+                logger.info("Skipping LLM borderline verification on large corpora")
+            groups = self._group_large(buckets, embeddings)
+        else:
+            # Calculate similarity matrix between distinct questions
+            similarity_matrix = cosine_similarity(embeddings)
 
-        clusters = self._cluster_buckets(len(buckets), similarity_matrix)
+            clusters = self._cluster_buckets(len(buckets), similarity_matrix)
 
-        # Tier 4: LLM double-check for merges embeddings couldn't decide
-        if verifier is not None and len(clusters) > 1:
-            clusters = self._merge_borderline_clusters(clusters, similarity_matrix,
-                                                       buckets, verifier)
+            # Tier 4: LLM double-check for merges embeddings couldn't decide
+            if verifier is not None and len(clusters) > 1:
+                clusters = self._merge_borderline_clusters(clusters, similarity_matrix,
+                                                           buckets, verifier)
 
-        groups = [self._build_group(indices, buckets, embeddings, similarity_matrix)
-                  for indices in clusters]
+            groups = [self._build_group(indices, buckets, embeddings, similarity_matrix)
+                      for indices in clusters]
 
         # Sort groups by count (most common first)
         groups.sort(key=lambda x: x['count'], reverse=True)
+
+        return groups
+
+    def _group_large(self, buckets: List[List[Dict]], embeddings) -> List[Dict]:
+        """
+        Leader clustering for large corpora: each question is compared to
+        cluster centroids only — O(n*k) time and O(n*d) memory — instead of
+        building the full O(n^2) similarity matrix.
+        """
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        unit = embeddings / norms
+
+        clusters: List[List[int]] = []
+        sums = []         # running (un-normalized) sum of unit vectors per cluster
+        centroids = None  # normalized centroid matrix, updated incrementally
+
+        for i in range(len(unit)):
+            if clusters:
+                sims = centroids @ unit[i]
+                best = int(np.argmax(sims))
+                if sims[best] >= self.similarity_threshold:
+                    clusters[best].append(i)
+                    sums[best] += unit[i]
+                    centroids[best] = sums[best] / np.linalg.norm(sums[best])
+                    continue
+            clusters.append([i])
+            sums.append(unit[i].copy())
+            centroids = (unit[i].copy().reshape(1, -1) if centroids is None
+                         else np.vstack([centroids, unit[i]]))
+
+        groups = []
+        for indices in clusters:
+            group_questions = [q for idx in indices for q in buckets[idx]]
+            vectors = unit[indices]
+            centroid = np.mean(vectors, axis=0)
+
+            distances = np.linalg.norm(vectors - centroid, axis=1)
+            representative = buckets[indices[int(np.argmin(distances))]][0]['text']
+
+            if len(indices) > 1:
+                # Pairwise similarity within the cluster (sampled when huge)
+                sample = vectors if len(indices) <= 200 else vectors[:200]
+                sims = sample @ sample.T
+                upper = sims[np.triu_indices(len(sample), k=1)]
+                avg_sim = float(np.mean(upper)) if upper.size else 1.0
+            else:
+                avg_sim = 1.0
+
+            groups.append({
+                'representative_question': representative,
+                'questions': group_questions,
+                'count': len(group_questions),
+                'avg_similarity': avg_sim
+            })
 
         return groups
 

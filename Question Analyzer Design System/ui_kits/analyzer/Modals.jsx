@@ -74,6 +74,8 @@ function UploadModal({ open, onClose, onImported }) {
     else if (stage === 'complete') { setActiveStep(3); setProgress(100); }
   };
 
+  const jobIdRef = React.useRef(null);
+
   const run = async () => {
     if (!file) return;
 
@@ -81,6 +83,7 @@ function UploadModal({ open, onClose, onImported }) {
     setProgress(0);
     setActiveStep(0);
     setError(null);
+    jobIdRef.current = null;
 
     try {
       const settings = window.QA_SETTINGS.get();
@@ -93,8 +96,9 @@ function UploadModal({ open, onClose, onImported }) {
         throw new Error(status.message || 'The analysis backend is not ready.');
       }
 
-      const content = await file.text();
-      const data = await window.QA_API.analyze(content, settings, onProgress);
+      // The File goes to the backend as-is (zips are unpacked server-side)
+      const data = await window.QA_API.analyze(file, settings, onProgress,
+        (jobId) => { jobIdRef.current = jobId; });
 
       setProgress(100);
       setResults(data);
@@ -105,10 +109,19 @@ function UploadModal({ open, onClose, onImported }) {
       setTimeout(() => setPhase('done'), 300);
 
     } catch (err) {
+      jobIdRef.current = null;
+      if (err.cancelled) {
+        setPhase('pick');  // back to file selection, not an error state
+        return;
+      }
       setError(err.message);
       setPhase('error');
       console.error('Analysis error:', err);
     }
+  };
+
+  const cancel = () => {
+    if (jobIdRef.current) window.QA_API.cancelJob(jobIdRef.current);
   };
 
   return (
@@ -117,8 +130,8 @@ function UploadModal({ open, onClose, onImported }) {
       <div style={{ padding: '0 24px 24px' }}>
         {phase === 'pick' ? (
           <React.Fragment>
-            <FileDropzone fileName={file ? file.name : null} accept=".json,.txt,.csv"
-              title="Drop a transcript export here or click to browse" hint="JSON, TXT or CSV up to 200MB"
+            <FileDropzone fileName={file ? file.name : null} accept=".json,.txt,.csv,.zip"
+              title="Drop a transcript export here or click to browse" hint="JSON, TXT, CSV — or a zipped Slack export"
               onFile={(f) => setFile(f)} onClear={() => setFile(null)} />
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
               <Button variant="ghost" onClick={onClose}>Cancel</Button>
@@ -144,6 +157,9 @@ function UploadModal({ open, onClose, onImported }) {
                   {s}
                 </div>
               ))}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
+              <Button variant="ghost" icon={<Icon name="x" size={15} />} onClick={cancel}>Cancel analysis</Button>
             </div>
           </div>
         ) : null}

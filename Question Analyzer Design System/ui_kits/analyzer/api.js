@@ -71,17 +71,29 @@
   }
 
   // Start an analysis job and poll until it finishes.
-  // onProgress receives {stage, completed, total} as the backend reports it.
-  async function analyze(content, { provider = 'ollama', threshold = 0.85 } = {}, onProgress) {
-    const response = await fetch(`${API_BASE}/api/analyze`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content, provider, threshold }),
-    });
+  // `input` is either a string of transcript text or a File (.json/.txt/.csv/.zip).
+  // onProgress receives {stage, completed, total}; onStarted receives the job id
+  // (use it with cancelJob).
+  async function analyze(input, { provider = 'ollama', threshold = 0.85 } = {}, onProgress, onStarted) {
+    let response;
+    if (input instanceof File) {
+      const form = new FormData();
+      form.append('files', input);
+      form.append('provider', provider);
+      form.append('threshold', threshold);
+      response = await fetch(`${API_BASE}/api/analyze`, { method: 'POST', body: form });
+    } else {
+      response = await fetch(`${API_BASE}/api/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: input, provider, threshold }),
+      });
+    }
     const started = await response.json().catch(() => ({}));
     if (!response.ok || !started.success) {
       throw new Error(started.error || `Could not start analysis (${response.status})`);
     }
+    if (onStarted) onStarted(started.job_id);
 
     for (;;) {
       await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
@@ -91,12 +103,24 @@
         window.ANALYSIS_ID = job.analysis_id;
         return job.data;
       }
+      if (job.status === 'cancelled') {
+        const err = new Error('Analysis cancelled');
+        err.cancelled = true;
+        throw err;
+      }
       if (job.status === 'error') throw new Error(job.error || 'Analysis failed');
     }
   }
 
+  // Request cancellation of a queued or running job.
+  async function cancelJob(jobId) {
+    try {
+      await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' });
+    } catch (err) { /* job may already be finishing; polling will resolve it */ }
+  }
+
   window.QA_API = { API_BASE, health, latestAnalysis, listAnalyses, getAnalysis,
-    deleteAnalysis, exportUrl, latestWeekly, analyze };
+    deleteAnalysis, exportUrl, latestWeekly, analyze, cancelJob };
 
   // ---- Analysis settings (provider + threshold), persisted locally ----
   const SETTINGS_KEY = 'qa-analysis-settings';
