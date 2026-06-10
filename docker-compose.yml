@@ -12,11 +12,13 @@ services:
       - "5000:5000"
     environment:
       OLLAMA_URL: http://ollama:11434
+      TOPIC_BANK_PATH: /app/bankdata/topic_bank.json
     volumes:
       - analyses:/app/analyses
       - embedding-cache:/app/.embedding_cache
       - llm-cache:/app/.llm_cache
       - jobs:/app/jobs
+      - topic-bank:/app/bankdata
     depends_on:
       - ollama
     restart: unless-stopped
@@ -43,4 +45,5 @@ volumes:
   embedding-cache:
   llm-cache:
   jobs:
+  topic-bank:
   ollama-models:

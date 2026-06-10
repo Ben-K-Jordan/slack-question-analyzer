@@ -212,7 +212,7 @@ function DashboardView() {
         {groups.slice(0, visibleCount).map((g, i) => (
           <RankedRow key={g.rank} rank={g.rank} index={i} question={g.question} count={g.count}
             maxCount={max} keywords={g.keywords} similarity={g.similarity} questions={g.questions}
-            topic={g.topic} summary={g.summary} defaultOpen={i === 0 && !query} />
+            topic={g.topic} summary={g.summary} seenIn={g.seenIn} defaultOpen={i === 0 && !query} />
         ))}
         {groups.length === 0 ? <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-helper)', borderBottom: '1px solid var(--border-subtle)' }}>No topics match “{query}”.</div> : null}
       </div>
@@ -282,6 +282,7 @@ function transformAnalysisResults(results) {
       similarity: `${Math.round(g.avg_similarity * 100)}%`,
       topic: g.topic || null,
       summary: g.summary || null,
+      seenIn: g.seen_in_analyses || 0,
       question: g.representative_question,
       keywords: g.keywords || [],
       questions: g.questions || []
