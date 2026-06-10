@@ -29,9 +29,9 @@ from flask import Flask, request, jsonify, send_from_directory, redirect, Respon
 from flask_cors import CORS
 from dotenv import load_dotenv
 
-from src.analyzer import QuestionAnalyzer
-from src.weekly_stats import compute_weekly_stats
-from src.exporters import to_csv, to_markdown
+from slack_question_analyzer.analyzer import QuestionAnalyzer
+from slack_question_analyzer.weekly_stats import compute_weekly_stats
+from slack_question_analyzer.exporters import to_csv, to_markdown
 
 load_dotenv()
 logger = logging.getLogger(__name__)

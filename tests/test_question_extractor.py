@@ -1,6 +1,6 @@
 """Tests for question extraction and normalization."""
 
-from src.question_extractor import QuestionExtractor
+from slack_question_analyzer.question_extractor import QuestionExtractor
 
 
 def test_detects_question_mark():

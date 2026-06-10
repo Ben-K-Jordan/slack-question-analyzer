@@ -10,7 +10,7 @@ from .analyzer import QuestionAnalyzer
 
 
 @click.group()
-@click.version_option(version='1.0.0')
+@click.version_option(version='2.0.0')
 @click.option('--verbose', '-v', is_flag=True, help='Show debug-level logs')
 def cli(verbose):
     """
@@ -42,7 +42,7 @@ def analyze(input_file, output, provider, threshold, no_summary, no_cache, no_la
     INPUT_FILE: Path to file containing Slack messages/questions
 
     Example:
-        python -m src.cli analyze slack_content.txt -o results.json
+        slack-analyzer analyze slack_content.txt -o results.json
     """
     try:
         # Initialize analyzer
@@ -166,7 +166,7 @@ def setup():
         f.write('\n'.join(env_content))
     
     click.echo(f"\nConfiguration saved to {env_path}")
-    click.echo("\nYou're all set! Run 'python -m src.cli analyze <input_file>' to start analyzing.")
+    click.echo("\nYou're all set! Run 'slack-analyzer analyze <input_file>' to start analyzing.")
 
 
 @cli.command()

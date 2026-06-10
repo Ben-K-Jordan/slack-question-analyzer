@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from src.similarity_analyzer import SimilarityAnalyzer, EmbeddingCache, EmbeddingError
+from slack_question_analyzer.similarity_analyzer import SimilarityAnalyzer, EmbeddingCache, EmbeddingError
 
 
 def make_analyzer(monkeypatch, threshold='0.85'):
