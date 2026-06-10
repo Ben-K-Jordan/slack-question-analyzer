@@ -281,6 +281,66 @@ def test_rename_topic_endpoint(client):
     assert client.patch(f"/api/topics/{entry['id']}", json={'topic': '  '}).status_code == 400
 
 
+def test_delete_and_merge_topic_endpoints(client):
+    from slack_question_analyzer.topic_bank import TopicBank
+    bank = TopicBank()
+    keep = bank.record({'topic': 'Virus Scanning', 'summary': None,
+                        'representative_question': 'a?', 'keywords': [], 'count': 4},
+                       [1.0, 0.0])
+    junk = bank.record({'topic': 'Scanning Stuff', 'summary': None,
+                        'representative_question': 'b?', 'keywords': [], 'count': 2},
+                       [0.95, 0.31])
+    bank.save()
+
+    merged = client.post(f"/api/topics/{junk['id']}/merge", json={'into': keep['id']})
+    assert merged.status_code == 200
+    reloaded = TopicBank()
+    assert len(reloaded.entries) == 1
+    assert reloaded.entries[0]['question_count'] == 6
+
+    assert client.post(f"/api/topics/{keep['id']}/merge", json={}).status_code == 400
+    assert client.delete(f"/api/topics/{keep['id']}").status_code == 200
+    assert TopicBank().entries == []
+    assert client.delete('/api/topics/nonexistent').status_code == 404
+
+
+def test_health_flags_old_ollama_version(client, monkeypatch):
+    class FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self._payload
+
+    def fake_get(url, timeout=None):
+        if url.endswith('/api/version'):
+            return FakeResponse({'version': '0.3.9'})
+        return FakeResponse({'models': [{'name': 'nomic-embed-text:latest'},
+                                        {'name': 'llama3.2:latest'}]})
+
+    monkeypatch.setattr(api_server.requests, 'get', fake_get)
+    body = client.get('/api/health').get_json()
+    assert body['status'] == 'degraded'
+    assert 'too old' in body['message']
+    assert body['ollama']['version'] == '0.3.9'
+
+
+def test_choose_port_skips_occupied():
+    import socket
+    blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    blocker.bind(('127.0.0.1', 0))
+    busy_port = blocker.getsockname()[1]
+    try:
+        chosen = api_server.choose_port('127.0.0.1', busy_port)
+        assert chosen != busy_port
+        assert busy_port < chosen <= busy_port + 5
+    finally:
+        blocker.close()
+
+
 def test_model_pull_endpoint(client, monkeypatch):
     monkeypatch.setattr(api_server, '_model_pulls', {})
 

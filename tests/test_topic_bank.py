@@ -44,6 +44,82 @@ def test_matched_entries_accumulate_history(tmp_path):
     assert entry['analysis_count'] == 2
 
 
+def test_entries_never_match_across_embedding_models(tmp_path):
+    """Same dimensions, different model: vectors live in different spaces."""
+    path = tmp_path / 'bank.json'
+    old = TopicBank(path=str(path), model='old-model')
+    old.record(make_group(), [1.0, 0.0])
+    old.save()
+
+    new = TopicBank(path=str(path), model='new-model')
+    assert new.match([1.0, 0.0], threshold=0.5) is None
+    # Same model still matches
+    same = TopicBank(path=str(path), model='old-model')
+    assert same.match([1.0, 0.0], threshold=0.5) is not None
+
+
+def test_delete_and_merge(tmp_path):
+    bank = TopicBank(path=str(tmp_path / 'bank.json'), model='m')
+    keep = bank.record(make_group(topic='Virus Scanning', count=4), [1.0, 0.0])
+    junk = bank.record(make_group(topic='Scanning Stuff', count=2), [0.95, 0.31])
+
+    assert bank.merge(junk['id'], keep['id']) is True
+    assert len(bank.entries) == 1
+    assert keep['topic'] == 'Virus Scanning'
+    assert keep['question_count'] == 6
+
+    assert bank.delete(keep['id']) is True
+    assert bank.entries == []
+    assert bank.delete('nonexistent') is False
+    assert bank.merge('a', 'b') is False
+
+
+def test_keyword_fallback_topics_are_not_banked(monkeypatch):
+    """Junk keyword names must never stick in the bank."""
+    analyzer = make_analyzer(monkeypatch)
+    monkeypatch.setattr(analyzer.labeler, 'label_group',
+                        lambda texts, keywords=None: None)  # LLM gives nothing
+
+    results = analyzer.analyze_slack_content(SAMPLE_CONTENT)
+    group = results['groups'][0]
+    assert group['topic']  # keyword fallback name shown in this analysis...
+    assert 'topic_id' not in group  # ...but not learned
+    assert TopicBank().entries == []
+
+
+def test_bank_match_floor_ignores_loose_thresholds(monkeypatch):
+    """Auto-adjusted low grouping thresholds can't cause loose bank matches."""
+    monkeypatch.setenv('SIMILARITY_THRESHOLD', '0.5')  # very loose grouping
+    monkeypatch.setenv('OLLAMA_MODEL', 'test-embed')
+    monkeypatch.setenv('LLM_EXTRACTION', 'off')
+    analyzer = QuestionAnalyzer(provider='ollama', use_disk_cache=False,
+                                label_groups=True)
+
+    # Bank knows a topic only ~0.7 similar to the new group: below the 0.8 floor
+    bank = TopicBank(model='test-embed')
+    bank.record({'topic': 'Unrelated Topic', 'summary': None,
+                 'representative_question': 'x?', 'keywords': [], 'count': 2},
+                [0.7, float(np.sqrt(1 - 0.49))])
+    bank.save()
+
+    def fake_batch(texts, progress_callback=None):
+        for t in texts:
+            analyzer.similarity_analyzer.embeddings_cache.set(t, VECTORS[t])
+        return np.array([VECTORS[t] for t in texts])
+
+    monkeypatch.setattr(analyzer.similarity_analyzer, 'get_embeddings_batch', fake_batch)
+    monkeypatch.setattr(analyzer.labeler, 'available', lambda: True)
+    monkeypatch.setattr(analyzer.labeler, 'verify_same_topic', lambda a, b: None)
+    monkeypatch.setattr(analyzer.labeler, 'summarize_analysis', lambda g, t: None)
+    monkeypatch.setattr(analyzer.labeler, 'label_group',
+                        lambda texts, keywords=None: {'topic': 'Password Reset',
+                                                      'summary': 's'})
+
+    results = analyzer.analyze_slack_content(SAMPLE_CONTENT)
+    # The loose bank entry must NOT have claimed the group
+    assert results['groups'][0]['topic'] == 'Password Reset'
+
+
 def test_dimension_mismatch_entries_are_skipped(tmp_path):
     """Old entries from a different embedding model can't poison matches."""
     bank = TopicBank(path=str(tmp_path / 'bank.json'))

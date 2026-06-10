@@ -1,6 +1,6 @@
 // App header: brand, animated Dashboard | Week in Review toggle,
 // Upload transcript, and the account / sign-in avatar.
-function AppHeader({ view, setView, onUpload, onHistory, onSettings }) {
+function AppHeader({ view, setView, onUpload, onHistory, onTopics, onSettings }) {
   const segs = [{ key: 'dashboard', label: 'Dashboard' }, { key: 'week', label: 'Week in Review' }];
   const activeIdx = segs.findIndex((s) => s.key === view);
 
@@ -52,6 +52,11 @@ function AppHeader({ view, setView, onUpload, onHistory, onSettings }) {
         <button onClick={onHistory} title="Analysis history" aria-label="Analysis history"
           style={iconBtn} onMouseEnter={hover} onMouseLeave={unhover}>
           <Icon name="history" size={16} />
+        </button>
+
+        <button onClick={onTopics} title="Learned topics" aria-label="Learned topics"
+          style={iconBtn} onMouseEnter={hover} onMouseLeave={unhover}>
+          <Icon name="book-marked" size={16} />
         </button>
 
         <button onClick={onSettings} title="Analysis settings" aria-label="Analysis settings"

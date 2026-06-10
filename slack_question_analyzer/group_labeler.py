@@ -89,7 +89,13 @@ LABEL_SYSTEM = (
     "- The topic must name the SPECIFIC feature, system, or task being asked about.\n"
     "- Never use vague topics like 'General Questions', 'Help', 'Miscellaneous', "
     "'Various Issues', or 'Technical Questions'.\n"
-    "- Topic: 2-4 words, title case. Summary: one sentence describing what people are asking.\n"
+    "- Never use the bare product name alone as the topic — name the specific "
+    "capability inside it.\n"
+    "- Never start the topic with 'How to' — it is a category name, not a question.\n"
+    "- Keep exact product and feature terms from the questions (don't paraphrase "
+    "technical names).\n"
+    "- Topic: 2-4 words, Title Case. Summary: one sentence describing what people "
+    "are asking.\n"
     "- Respond with JSON only."
 )
 
@@ -105,19 +111,34 @@ Questions:
 - Can we trigger a file transfer via a REST API call instead of a scheduled action?
 Answer: {"topic": "Scheduled Action APIs", "summary": "Users want REST APIs to trigger or manage scheduled actions instead of using the scheduler."}
 
+Example:
+Questions:
+- Why won't the MFT UI open after upgrading to v12?
+- Debug log shows NullPointerException while fetching UI settings — anyone seen this?
+Answer: {"topic": "MFT UI Errors", "summary": "Users hit internal errors and exceptions opening the MFT UI after upgrades."}
+
 Now label this group."""
 
 VERIFY_SYSTEM = (
     "You decide whether two groups of support questions ask about the same underlying "
     "topic and should be merged. Be strict: questions about related but different tasks "
-    "(for example, resetting a password vs. resetting an API key) are NOT the same topic. "
+    "are NOT the same topic.\n\n"
+    "Example: Group A asks about resetting passwords; Group B asks about resetting "
+    "API keys. Answer: {\"same_topic\": false} — related actions on different things.\n"
+    "Example: Group A asks 'how do I quarantine an infected file'; Group B asks 'where "
+    "do files go when the virus scan fails'. Answer: {\"same_topic\": true} — both are "
+    "about quarantine behavior.\n\n"
     "Respond with JSON only."
 )
 
 SUMMARY_SYSTEM = (
     "You write a brief executive summary of support-question analytics for a team lead. "
-    "2-3 sentences: what the dominant themes are and anything notable. Mention concrete "
-    "topics and counts; no filler, no preamble. Respond with JSON only."
+    "2-3 sentences: the dominant themes, with concrete topic names and counts, plus "
+    "anything notable (spikes, new topics). No filler, no preamble, no advice.\n"
+    "Example: {\"summary\": \"Antivirus scanning dominates this period with 12 "
+    "questions, followed by metering setup (7). Cluster failover questions appeared "
+    "for the first time.\"}\n"
+    "Respond with JSON only."
 )
 
 DETECT_SYSTEM = (
@@ -135,19 +156,37 @@ EXTRACT_SYSTEM = (
     "Rules:\n"
     "- Rewrite each one as a clear, self-contained question, dropping greetings "
     "('Hi team'), signatures, and filler.\n"
+    "- Keep exact technical terms, product names, error messages, and version numbers "
+    "verbatim — never paraphrase or invent details that aren't in the message.\n"
     "- A message may contain several questions: output one entry per question, "
     "repeating the message number.\n"
-    "- Implicit help requests count ('stuck all day, the webhook keeps timing out' "
-    "-> 'How do I fix webhook timeouts?').\n"
+    "- Implicit help requests count.\n"
     "- Skip statements, status updates, headers, and answers.\n"
     "Respond with JSON only: {\"questions\": [{\"index\": <message number>, "
     "\"question\": \"<the question>\"}]}. Use an empty list if none qualify."
 )
 
+EXTRACT_FEW_SHOT = """Example messages:
+0. Hi all! Quick one — can we trigger transfers via REST instead of the scheduler? Also is there a way to bulk-disable actions?
+1. Deployed the fix to prod this morning, all green.
+2. been fighting the SFTP connection all day, keeps refusing, no idea why
+
+Example answer: {"questions": [
+{"index": 0, "question": "Can we trigger transfers via REST instead of the scheduler?"},
+{"index": 0, "question": "Is there a way to bulk-disable actions?"},
+{"index": 2, "question": "Why does my SFTP connection keep getting refused?"}]}
+
+Now extract from these messages."""
+
 ANSWERED_SYSTEM = (
-    "You decide whether the replies in a Slack thread actually answered the question. "
-    "A reply that only acknowledges, asks for more details, or says 'I'll look into it' "
-    "does NOT count as an answer. Respond with JSON only."
+    "You decide whether the replies in a Slack thread actually answered the question.\n"
+    "A reply that only acknowledges, asks for more details, says 'I'll look into it', "
+    "or links elsewhere without substance does NOT count as an answer.\n"
+    "Example: question 'How do I reset my password?', reply 'Settings > Security > "
+    "Reset, then check your email.' Answer: {\"answered\": true}\n"
+    "Example: question 'Why did my transfer fail?', reply 'Hmm, let me check with the "
+    "team.' Answer: {\"answered\": false}\n"
+    "Respond with JSON only."
 )
 
 
@@ -178,6 +217,16 @@ class GroupLabeler:
         self._cache = JsonDiskCache(provider, self.model or 'none',
                                     os.getenv('LLM_CACHE_DIR', '.llm_cache'),
                                     enabled=cache_enabled)
+
+        # Optional domain hint injected into every prompt: knowing the product
+        # makes small models dramatically more specific
+        self.domain_context = os.getenv('DOMAIN_CONTEXT', '').strip()
+
+    def _system(self, base: str) -> str:
+        """System prompt with the optional domain context appended."""
+        if self.domain_context:
+            return f"{base}\nContext: the messages come from {self.domain_context}."
+        return base
 
     # ------------------------------------------------------------------
     # Availability
@@ -327,7 +376,7 @@ class GroupLabeler:
         user = '\n'.join(parts)
 
         data = self._generate_json(
-            LABEL_SYSTEM, user, LABEL_SCHEMA,
+            self._system(LABEL_SYSTEM), user, LABEL_SCHEMA,
             validator=self._validate_label,
             corrective='Your previous answer was rejected. The topic must name the '
                        'specific feature, system, or task in 2-4 words. Respond with '
@@ -350,7 +399,7 @@ class GroupLabeler:
             '\n\nGroup B:\n' + '\n'.join(f"- {q}" for q in questions_b[:3]) +
             '\n\nDo Group A and Group B ask about the same underlying topic?'
         )
-        data = self._generate_json(VERIFY_SYSTEM, user, VERIFY_SCHEMA, max_tokens=60)
+        data = self._generate_json(self._system(VERIFY_SYSTEM), user, VERIFY_SCHEMA, max_tokens=60)
         if data is None or not isinstance(data.get('same_topic'), bool):
             return None
         return data['same_topic']
@@ -363,7 +412,7 @@ class GroupLabeler:
             lines.append(f"{i}. {topic} — asked {group['count']} times "
                          f"(e.g. \"{group['representative_question']}\")")
         data = self._generate_json(
-            SUMMARY_SYSTEM, '\n'.join(lines), SUMMARY_SCHEMA,
+            self._system(SUMMARY_SYSTEM), '\n'.join(lines), SUMMARY_SCHEMA,
             validator=lambda d: None if str(d.get('summary', '')).strip() else 'summary was empty',
             corrective='Respond with JSON only and a non-empty summary.',
         )
@@ -376,7 +425,7 @@ class GroupLabeler:
         Find implicit help requests in messages the regex extractor skipped.
         Returns [{'index': int, 'question': str}], empty on failure.
         """
-        return self._questions_from_llm(message_texts, DETECT_SYSTEM) or []
+        return self._questions_from_llm(message_texts, self._system(DETECT_SYSTEM)) or []
 
     def extract_questions(self, message_texts: List[str]) -> Optional[List[Dict]]:
         """
@@ -385,13 +434,15 @@ class GroupLabeler:
         are allowed. Returns [{'index': int, 'question': str}]; an empty list
         means "no questions here", None means the call failed.
         """
-        return self._questions_from_llm(message_texts, EXTRACT_SYSTEM)
+        return self._questions_from_llm(message_texts, self._system(EXTRACT_SYSTEM))
 
     def _questions_from_llm(self, message_texts: List[str],
                             system: str) -> Optional[List[Dict]]:
-        numbered = '\n'.join(f"{i}. {text[:300]}" for i, text in enumerate(message_texts))
-        data = self._generate_json(system, f"Messages:\n{numbered}", DETECT_SCHEMA,
-                                   max_tokens=500)
+        numbered = '\n'.join(f"{i}. {text[:600]}" for i, text in enumerate(message_texts))
+        user = (f"{EXTRACT_FEW_SHOT}\n{numbered}" if system.startswith(EXTRACT_SYSTEM[:40])
+                else f"Messages:\n{numbered}")
+        data = self._generate_json(system, user, DETECT_SCHEMA,
+                                   max_tokens=800)
         if data is None or not isinstance(data.get('questions'), list):
             return None
 
@@ -412,7 +463,7 @@ class GroupLabeler:
             '\n'.join(f"- {r[:300]}" for r in replies[:5]) +
             '\n\nWas the question answered by these replies?'
         )
-        data = self._generate_json(ANSWERED_SYSTEM, user, ANSWERED_SCHEMA, max_tokens=60)
+        data = self._generate_json(self._system(ANSWERED_SYSTEM), user, ANSWERED_SCHEMA, max_tokens=60)
         if data is None or not isinstance(data.get('answered'), bool):
             return None
         return data['answered']
