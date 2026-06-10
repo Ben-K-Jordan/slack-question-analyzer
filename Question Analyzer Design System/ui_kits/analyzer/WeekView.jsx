@@ -18,14 +18,17 @@ function WeekView() {
     );
   }
 
-  const d = weekly || window.WEEK_DATA;
-  const isDemo = !weekly;
+  const d = weekly;
 
   if (!d || !d.groups || d.groups.length === 0) {
+    // Backend-driven empty state: no mock data, ever
     return (
-      <div style={{ maxWidth: 1040, margin: '0 auto', padding: '36px 40px 80px', width: '100%', textAlign: 'center' }}>
+      <div style={{ maxWidth: 1040, margin: '0 auto', padding: '70px 40px 80px', width: '100%', textAlign: 'center' }}>
         <h2 style={{ fontSize: 32, fontWeight: 300, marginBottom: 16 }}>Week in Review</h2>
-        <p style={{ color: 'var(--text-secondary)', fontSize: 16 }}>No questions in the most recent week of your latest analysis. Upload a newer transcript to see trends.</p>
+        <p style={{ color: 'var(--text-secondary)', fontSize: 16, maxWidth: 460, margin: '0 auto' }}>
+          {d ? 'No questions in the most recent week of your latest analysis — upload a newer transcript to see trends.'
+             : 'Weekly trends appear here once you have analyzed a transcript with dated questions.'}
+        </p>
       </div>
     );
   }
@@ -40,7 +43,7 @@ function WeekView() {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
           <div>
             <div style={{ fontSize: 11, color: 'var(--text-helper)', fontWeight: 500 }}>
-              Week in review{isDemo ? ' · sample data' : ''}
+              Week in review
             </div>
             <div style={{ fontSize: 22, fontWeight: 300, letterSpacing: '-.01em', marginTop: 4 }}>{d.weekLabel}</div>
           </div>

@@ -21,7 +21,7 @@ function App() {
         onSettings={() => setSettingsOpen(true)} />
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', background: '#fff' }}>
         <div key={`${view}:${analysisVersion}`} className="qa-view">
-          {view === 'dashboard' ? <DashboardView /> : <WeekView />}
+          {view === 'dashboard' ? <DashboardView onUpload={() => setUploadOpen(true)} /> : <WeekView />}
         </div>
       </div>
       <UploadModal open={uploadOpen} onClose={() => setUploadOpen(false)}

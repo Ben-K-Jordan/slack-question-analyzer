@@ -1,17 +1,21 @@
 // Overall dashboard — common questions, ranked by occurrences (all-time).
-function DashboardView() {
+// Entirely backend-driven: real saved analyses or an empty state, never mocks.
+function DashboardView({ onUpload }) {
   // Use real analysis results when available; on first load, pull the most
   // recent saved analysis from the backend so results survive page refreshes.
   const [analysisResults, setAnalysisResults] = React.useState(window.ANALYSIS_RESULTS || null);
+  const [loadingLatest, setLoadingLatest] = React.useState(!window.ANALYSIS_RESULTS);
   React.useEffect(() => {
-    if (analysisResults || !window.QA_API) return;
+    if (analysisResults || !window.QA_API) { setLoadingLatest(false); return; }
     let cancelled = false;
     window.QA_API.latestAnalysis().then((latest) => {
-      if (latest && !cancelled) {
+      if (cancelled) return;
+      if (latest) {
         window.ANALYSIS_RESULTS = latest;
         setAnalysisResults(latest);
       }
-    });
+      setLoadingLatest(false);
+    }).catch(() => { if (!cancelled) setLoadingLatest(false); });
     return () => { cancelled = true; };
   }, []);
 
@@ -78,8 +82,7 @@ function DashboardView() {
   const healthBroken = setupHealth && setupHealth.status !== 'ok';
   const showSetupBanner = healthBroken || missingModels.length > 0;
 
-  const isDemo = !analysisResults;
-  const d = analysisResults ? transformAnalysisResults(analysisResults) : window.DASHBOARD_DATA;
+  const d = analysisResults ? transformAnalysisResults(analysisResults) : null;
   const [query, setQuery] = React.useState('');
   const [visibleCount, setVisibleCount] = React.useState(PAGE_SIZE);
   const [showUnique, setShowUnique] = React.useState(true);
@@ -92,12 +95,12 @@ function DashboardView() {
   const download = (format) => {
     if (window.ANALYSIS_ID) window.open(window.QA_API.exportUrl(window.ANALYSIS_ID, format), '_blank');
   };
-  const max = d.groups && d.groups.length > 0 ? d.groups[0].count : 0;
-  const groups = d.groups ? d.groups.filter((g) =>
+  const max = d && d.groups && d.groups.length > 0 ? d.groups[0].count : 0;
+  const groups = d && d.groups ? d.groups.filter((g) =>
     g.question.toLowerCase().includes(query.toLowerCase()) ||
     g.keywords.join(' ').includes(query.toLowerCase()) ||
     (g.topic && g.topic.toLowerCase().includes(query.toLowerCase()))) : [];
-  const uniqueQuestions = (d.ungrouped || []).filter((q) =>
+  const uniqueQuestions = ((d && d.ungrouped) || []).filter((q) =>
     q.text.toLowerCase().includes(query.toLowerCase()));
 
   const stat = (label, value, accent) => (
@@ -114,6 +117,73 @@ function DashboardView() {
     background: 'var(--field)', borderBottom: '1px solid var(--border-strong)', width: 300, maxWidth: '40vw',
   };
 
+  const setupBanner = showSetupBanner ? (
+    <Reveal delay={100}>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: '16px 24px', background: '#fff', border: '1px solid var(--border-subtle)', borderLeft: `3px solid ${healthBroken ? 'var(--red-60)' : 'var(--blue-60)'}`, marginBottom: 32 }}>
+        <span style={{ color: healthBroken ? 'var(--red-60)' : 'var(--blue-60)', flex: '0 0 auto', marginTop: 1 }}><Icon name={healthBroken ? 'alert-triangle' : 'download'} size={16} /></span>
+        <div style={{ fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.55, minWidth: 0, flex: 1 }}>
+          <b>{healthBroken ? 'Setup needed before analyzing.' : 'Topic labels are running in keyword-fallback mode.'}</b>
+          {missingModels.length === 0 ? <span> {setupHealth.message}</span> : null}
+          {missingModels.map((model) => (
+            <div key={model} style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 10 }}>
+              {pulls[model] && pulls[model].error ? (
+                <span style={{ color: 'var(--red-60)' }}>Download of {model} failed: {pulls[model].error}</span>
+              ) : pulls[model] ? (
+                <React.Fragment>
+                  <span style={{ whiteSpace: 'nowrap' }}>Downloading <b>{model}</b>… {pulls[model].pct}%</span>
+                  <div style={{ flex: 1, height: 4, background: 'var(--gray-20)', overflow: 'hidden', minWidth: 80 }}>
+                    <div style={{ height: '100%', width: `${pulls[model].pct}%`, background: 'var(--blue-60)', transition: 'width 600ms linear' }} />
+                  </div>
+                </React.Fragment>
+              ) : (
+                <React.Fragment>
+                  <span>Model <b>{model}</b> isn't downloaded yet.</span>
+                  <button onClick={() => downloadModel(model)}
+                    style={{ height: 28, padding: '0 12px', display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--blue-60)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 12.5, whiteSpace: 'nowrap' }}>
+                    <Icon name="download" size={13} /> Download now
+                  </button>
+                </React.Fragment>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </Reveal>
+  ) : null;
+
+  if (loadingLatest) {
+    return (
+      <div style={{ maxWidth: 1000, margin: '0 auto', padding: '60px 40px', width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, color: 'var(--text-secondary)', fontSize: 14 }}>
+        <Icon name="loader" size={16} /> Loading…
+      </div>
+    );
+  }
+
+  if (!d) {
+    // Backend has no saved analyses yet: honest empty state, no mock data
+    return (
+      <div style={{ maxWidth: 1000, margin: '0 auto', padding: '44px 40px 80px', width: '100%' }}>
+        {setupBanner}
+        <Reveal>
+          <div style={{ textAlign: 'center', padding: '70px 24px', border: '1px dashed var(--border-strong)', background: '#fff' }}>
+            <span style={{ display: 'inline-flex', width: 56, height: 56, borderRadius: '50%', background: 'var(--gray-10)', alignItems: 'center', justifyContent: 'center', marginBottom: 18, color: 'var(--blue-60)' }}>
+              <Icon name="upload" size={24} />
+            </span>
+            <h1 style={{ fontSize: 26, fontWeight: 300, letterSpacing: '-.02em', margin: '0 0 8px' }}>No analyses yet</h1>
+            <div style={{ fontSize: 14, color: 'var(--text-secondary)', maxWidth: 440, margin: '0 auto 24px', lineHeight: 1.55 }}>
+              Upload a Slack transcript (TXT, JSON, CSV, or a zipped export) and the questions
+              will be extracted, grouped by topic, and ranked right here.
+            </div>
+            <button onClick={onUpload}
+              style={{ height: 40, padding: '0 22px', display: 'inline-flex', alignItems: 'center', gap: 8, background: 'var(--blue-60)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 14 }}>
+              <Icon name="upload" size={16} /> Upload transcript
+            </button>
+          </div>
+        </Reveal>
+      </div>
+    );
+  }
+
   return (
     <div style={{ maxWidth: 1000, margin: '0 auto', padding: '44px 40px 80px', width: '100%' }}>
       <Reveal>
@@ -122,11 +192,10 @@ function DashboardView() {
             <h1 style={{ fontSize: 32, fontWeight: 300, letterSpacing: '-.02em', margin: '0 0 6px' }}>Most-asked questions</h1>
             <div style={{ fontSize: 14, color: 'var(--text-secondary)' }}>
               All-time across your monitored Slack channels · ranked by occurrences
-              {isDemo ? <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 600, letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--purple-60)', background: 'var(--gray-10)', padding: '2px 8px' }}>Sample data</span> : null}
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            {!isDemo && window.ANALYSIS_ID ? (
+            {window.ANALYSIS_ID ? (
               <React.Fragment>
                 <button style={exportBtn} title="Download Markdown report" onClick={() => download('md')}>
                   <Icon name="download" size={14} /> Report
@@ -157,39 +226,7 @@ function DashboardView() {
         </div>
       </Reveal>
 
-      {showSetupBanner ? (
-        <Reveal delay={100}>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: '16px 24px', background: '#fff', border: '1px solid var(--border-subtle)', borderLeft: `3px solid ${healthBroken ? 'var(--red-60)' : 'var(--blue-60)'}`, marginBottom: 32 }}>
-            <span style={{ color: healthBroken ? 'var(--red-60)' : 'var(--blue-60)', flex: '0 0 auto', marginTop: 1 }}><Icon name={healthBroken ? 'alert-triangle' : 'download'} size={16} /></span>
-            <div style={{ fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.55, minWidth: 0, flex: 1 }}>
-              <b>{healthBroken ? 'Setup needed before analyzing.' : 'Topic labels are running in keyword-fallback mode.'}</b>
-              {missingModels.length === 0 ? <span> {setupHealth.message}</span> : null}
-              {missingModels.map((model) => (
-                <div key={model} style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 10 }}>
-                  {pulls[model] && pulls[model].error ? (
-                    <span style={{ color: 'var(--red-60)' }}>Download of {model} failed: {pulls[model].error}</span>
-                  ) : pulls[model] ? (
-                    <React.Fragment>
-                      <span style={{ whiteSpace: 'nowrap' }}>Downloading <b>{model}</b>… {pulls[model].pct}%</span>
-                      <div style={{ flex: 1, height: 4, background: 'var(--gray-20)', overflow: 'hidden', minWidth: 80 }}>
-                        <div style={{ height: '100%', width: `${pulls[model].pct}%`, background: 'var(--blue-60)', transition: 'width 600ms linear' }} />
-                      </div>
-                    </React.Fragment>
-                  ) : (
-                    <React.Fragment>
-                      <span>Model <b>{model}</b> isn't downloaded yet.</span>
-                      <button onClick={() => downloadModel(model)}
-                        style={{ height: 28, padding: '0 12px', display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--blue-60)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 12.5, whiteSpace: 'nowrap' }}>
-                        <Icon name="download" size={13} /> Download now
-                      </button>
-                    </React.Fragment>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        </Reveal>
-      ) : null}
+      {setupBanner}
 
       {d.autoAdjusted ? (
         <Reveal delay={105}>
@@ -287,7 +324,7 @@ function thresholdHint(results) {
 
 // Transform API results to dashboard format
 function transformAnalysisResults(results) {
-  if (!results || !results.groups) return window.DASHBOARD_DATA;
+  if (!results || !results.groups) return null;
   
   const fallbackTopic = (g) => g.representative_question.split(' ').slice(0, 3).join(' ') + '...';
   return {
