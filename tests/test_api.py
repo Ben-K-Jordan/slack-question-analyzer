@@ -294,6 +294,14 @@ def test_unknown_job(client):
     assert client.get('/api/jobs/nope').status_code == 404
 
 
+def test_analyze_accepts_auto_threshold(client, fake_engine):
+    response = client.post('/api/analyze',
+                           json={'content': SAMPLE_CONTENT, 'threshold': 'auto'})
+    assert response.status_code == 202
+    body = wait_for_job(client, response.get_json()['job_id'])
+    assert body['status'] == 'done'
+
+
 def test_analyze_validation(client):
     assert client.post('/api/analyze', json={}).status_code == 400
     assert client.post('/api/analyze', json={'content': '  '}).status_code == 400

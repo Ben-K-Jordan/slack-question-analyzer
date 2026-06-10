@@ -331,11 +331,20 @@ function SettingsModal({ open, onClose }) {
           })}
         </div>
 
-        <Slider label="Similarity threshold" value={Math.round(settings.threshold * 100)}
-          min={50} max={100} step={1} format={(v) => `${v}%`}
-          onChange={(v) => setSettings({ ...settings, threshold: v / 100 })} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13.5, color: 'var(--text-primary)', cursor: 'pointer', marginBottom: 14 }}>
+          <input type="checkbox" checked={settings.threshold === 'auto'}
+            onChange={(e) => setSettings({ ...settings, threshold: e.target.checked ? 'auto' : 0.75 })} />
+          Auto similarity threshold <span style={{ fontSize: 11.5, color: 'var(--text-helper)' }}>(recommended — adapts to your embedding model)</span>
+        </label>
+
+        {settings.threshold !== 'auto' ? (
+          <Slider label="Similarity threshold" value={Math.round(settings.threshold * 100)}
+            min={50} max={100} step={1} format={(v) => `${v}%`}
+            onChange={(v) => setSettings({ ...settings, threshold: v / 100 })} />
+        ) : null}
         <div style={{ fontSize: 12, color: 'var(--text-helper)', margin: '10px 0 22px', lineHeight: 1.5 }}>
           Higher = stricter grouping (questions must be nearly identical). Lower = broader topics.
+          Auto starts at a model-appropriate value and relaxes itself if nothing groups.
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
