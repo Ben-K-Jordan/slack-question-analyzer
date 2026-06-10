@@ -378,7 +378,8 @@ Dashboard features:
 - **Week in Review**: real weekly trends computed from your latest analysis — volume
   vs last week, 6-week trend, and per-topic rank movement (weeks are anchored to the
   most recent question date in the transcript, so historical exports work too)
-- Until your first analysis, both views show demo data clearly labeled "sample data"
+- Before your first analysis, both views show a clean backend-driven empty state
+  with an upload prompt — never sample data
 
 Analyses are queued one at a time by default so a local Ollama isn't overloaded
 (`MAX_CONCURRENT_JOBS` to change), can be **cancelled** mid-run from the upload modal,
