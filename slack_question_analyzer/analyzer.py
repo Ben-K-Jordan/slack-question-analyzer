@@ -22,6 +22,8 @@ MAX_DETECTED_MESSAGES = 40
 DETECT_BATCH_SIZE = 8
 MAX_ANSWER_CHECKS = 20
 MIN_DETECT_MESSAGE_CHARS = 20
+# 'auto' extraction uses the LLM for everything up to this many messages
+MAX_FULL_EXTRACT_MESSAGES = 150
 
 
 class QuestionAnalyzer:
@@ -110,9 +112,15 @@ class QuestionAnalyzer:
         for content in contents:
             messages.extend(self.extractor.extract_messages(content))
 
-        # LLM_EXTRACTION=full: the LLM extracts (and cleans) every question
-        if self._detect_mode == 'full' and self._llm_enabled('auto'):
+        # LLM-first extraction: best quality, so it's the default ('auto') for
+        # normal-sized transcripts; 'full' forces it regardless of size
+        use_full = (self._detect_mode == 'full'
+                    or (self._detect_mode == 'auto'
+                        and len(messages) <= MAX_FULL_EXTRACT_MESSAGES))
+        did_full = False
+        if use_full and self._llm_enabled('auto'):
             questions = self._extract_questions_llm(messages, report)
+            did_full = True
         else:
             questions = self.extractor.questions_from_messages(messages)
         logger.info("Found %d questions", len(questions))
@@ -120,7 +128,8 @@ class QuestionAnalyzer:
 
         # Optional LLM pass: catch implicit help requests the regex missed
         # (already covered when the LLM did the whole extraction)
-        if self._detect_mode != 'full' and self._llm_enabled(self._detect_mode):
+        if not did_full and self._detect_mode in ('auto', 'on') \
+                and self._llm_enabled(self._detect_mode):
             questions += self._detect_missed_questions(messages, questions, report)
 
         if not questions:
@@ -298,6 +307,7 @@ class QuestionAnalyzer:
             # Pairwise similarity distribution — similarity scales differ
             # between embedding models, so this is how users tune the threshold
             'similarity_stats': self.similarity_analyzer.last_similarity_stats,
+            'threshold_auto_adjusted': self.similarity_analyzer.threshold_auto_adjusted,
         }
 
     @staticmethod

@@ -265,6 +265,55 @@ def test_similarity_stats_recorded(monkeypatch):
     assert 0.0 <= stats['median'] <= stats['p90'] <= stats['max']
 
 
+def test_default_threshold_is_model_aware(monkeypatch):
+    monkeypatch.delenv('SIMILARITY_THRESHOLD', raising=False)
+    monkeypatch.setenv('OLLAMA_MODEL', 'test-embed')
+    analyzer = SimilarityAnalyzer(provider='ollama', use_disk_cache=False)
+    assert analyzer.similarity_threshold == 0.75  # local models score lower
+    assert analyzer.threshold_pinned is False
+
+    monkeypatch.setenv('SIMILARITY_THRESHOLD', '0.9')
+    pinned = SimilarityAnalyzer(provider='ollama', use_disk_cache=False)
+    assert pinned.similarity_threshold == 0.9
+    assert pinned.threshold_pinned is True
+
+
+def test_threshold_auto_adjusts_when_nothing_groups(monkeypatch):
+    monkeypatch.delenv('SIMILARITY_THRESHOLD', raising=False)
+    monkeypatch.setenv('OLLAMA_MODEL', 'test-embed')
+    analyzer = SimilarityAnalyzer(provider='ollama', use_disk_cache=False)
+
+    # Best pair similarity 0.6: below the 0.75 default, so nothing groups
+    fake = np.array([[1.0, 0.0], [0.6, 0.8], [-1.0, 0.0]])
+    monkeypatch.setattr(analyzer, 'get_embeddings_batch',
+                        lambda texts, progress_callback=None: fake)
+
+    questions = [question('a longer question number one?'),
+                 question('a different question number two?'),
+                 question('an opposite question number three?')]
+    groups = analyzer.group_similar_questions(questions)
+
+    assert analyzer.threshold_auto_adjusted is True
+    assert analyzer.similarity_threshold == 0.58  # best pair 0.6, minus 0.02
+    assert any(g['count'] == 2 for g in groups)  # the 0.6 pair merged
+
+
+def test_pinned_threshold_never_auto_adjusts(monkeypatch):
+    analyzer = make_analyzer(monkeypatch, threshold='0.85')  # env-pinned
+
+    fake = np.array([[1.0, 0.0], [0.6, 0.8], [-1.0, 0.0]])
+    monkeypatch.setattr(analyzer, 'get_embeddings_batch',
+                        lambda texts, progress_callback=None: fake)
+
+    questions = [question('a longer question number one?'),
+                 question('a different question number two?'),
+                 question('an opposite question number three?')]
+    groups = analyzer.group_similar_questions(questions)
+
+    assert analyzer.threshold_auto_adjusted is False
+    assert all(g['count'] == 1 for g in groups)
+
+
 def test_embedding_cache_roundtrip(tmp_path):
     cache = EmbeddingCache('ollama', 'test-model', cache_dir=str(tmp_path))
     assert cache.get('hello') is None

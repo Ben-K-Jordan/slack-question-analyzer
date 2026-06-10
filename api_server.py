@@ -228,7 +228,7 @@ def recover_interrupted_jobs():
             continue
 
         provider = meta.get('provider') or os.getenv('AI_PROVIDER', 'ollama')
-        threshold = meta.get('threshold', 0.85)
+        threshold = meta.get('threshold')  # None = auto
         with _jobs_lock:
             _jobs[job_id] = {
                 'status': 'queued',
@@ -398,7 +398,7 @@ def analyze_transcript():
 
     if request.content_type and 'multipart/form-data' in request.content_type:
         provider = request.form.get('provider') or os.getenv('AI_PROVIDER', 'ollama')
-        threshold = request.form.get('threshold', 0.85)
+        threshold = request.form.get('threshold', 'auto')
         try:
             contents = _contents_from_upload()
         except (ValueError, zipfile.BadZipFile) as e:
@@ -411,7 +411,7 @@ def analyze_transcript():
             return jsonify({'success': False, 'error': 'Content cannot be empty'}), 400
         contents = [data['content']]
         provider = data.get('provider') or os.getenv('AI_PROVIDER', 'ollama')
-        threshold = data.get('threshold', 0.85)
+        threshold = data.get('threshold', 'auto')
 
     if not any(c.strip() for c in contents):
         return jsonify({'success': False, 'error': 'Content cannot be empty'}), 400
@@ -422,12 +422,18 @@ def analyze_transcript():
             'error': f"Invalid provider '{provider}'. Use 'ollama', 'azure', or 'openai'."
         }), 400
 
-    try:
-        threshold = float(threshold)
-    except (TypeError, ValueError):
-        return jsonify({'success': False, 'error': 'threshold must be a number between 0 and 1'}), 400
-    if not 0.0 <= threshold <= 1.0:
-        return jsonify({'success': False, 'error': 'threshold must be between 0 and 1'}), 400
+    # 'auto' (the default): model-aware threshold that self-adjusts when
+    # nothing groups; a number pins it exactly
+    if threshold in (None, '', 'auto'):
+        threshold = None
+    else:
+        try:
+            threshold = float(threshold)
+        except (TypeError, ValueError):
+            return jsonify({'success': False,
+                            'error': "threshold must be 'auto' or a number between 0 and 1"}), 400
+        if not 0.0 <= threshold <= 1.0:
+            return jsonify({'success': False, 'error': 'threshold must be between 0 and 1'}), 400
 
     job_id = _start_job(contents, provider, threshold)
     return jsonify({'success': True, 'job_id': job_id}), 202
@@ -584,7 +590,8 @@ def get_config():
         'success': True,
         'config': {
             'provider': os.getenv('AI_PROVIDER', 'ollama'),
-            'threshold': float(os.getenv('SIMILARITY_THRESHOLD', '0.85')),
+            'threshold': (float(os.getenv('SIMILARITY_THRESHOLD'))
+                          if os.getenv('SIMILARITY_THRESHOLD') else 'auto'),
             'ollama_url': os.getenv('OLLAMA_URL', 'http://localhost:11434'),
             'ollama_model': os.getenv('OLLAMA_MODEL', 'nomic-embed-text')
         }
