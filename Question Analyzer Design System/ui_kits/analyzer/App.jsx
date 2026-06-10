@@ -7,6 +7,16 @@ function App() {
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [topicsOpen, setTopicsOpen] = React.useState(false);
 
+  // Backend version shown in the header: a one-glance check that the browser
+  // is talking to the build you think it is
+  const [backendVersion, setBackendVersion] = React.useState(null);
+  React.useEffect(() => {
+    if (!window.QA_API) return;
+    window.QA_API.getConfig()
+      .then((c) => setBackendVersion(c.version || null))
+      .catch(() => setBackendVersion(null));
+  }, []);
+
   const showAnalysis = (data) => {
     window.ANALYSIS_RESULTS = data;
     setHistoryOpen(false);
@@ -18,7 +28,7 @@ function App() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#fff' }}>
       <AppHeader view={view} setView={setView} onUpload={() => setUploadOpen(true)}
         onHistory={() => setHistoryOpen(true)} onTopics={() => setTopicsOpen(true)}
-        onSettings={() => setSettingsOpen(true)} />
+        onSettings={() => setSettingsOpen(true)} version={backendVersion} />
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', background: '#fff' }}>
         <div key={`${view}:${analysisVersion}`} className="qa-view">
           {view === 'dashboard' ? <DashboardView onUpload={() => setUploadOpen(true)} /> : <WeekView />}
