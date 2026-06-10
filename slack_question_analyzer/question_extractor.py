@@ -56,6 +56,17 @@ class QuestionExtractor:
             return False
         return bool(self.starter_regex.search(sentence) or self.help_regex.search(sentence))
 
+    # Leading greetings carry no meaning and clutter the dashboard
+    _GREETING = re.compile(
+        r'^(?:(?:hi|hello|hey|greetings|good\s+(?:morning|afternoon|evening))'
+        r'(?:\s+(?:team|all|everyone|folks|guys|there))?[\s,!.:-]+)+',
+        re.IGNORECASE)
+
+    def strip_greeting(self, question: str) -> str:
+        """Remove a leading greeting ('Hi Team, ...') from a question."""
+        stripped = self._GREETING.sub('', question).strip()
+        return stripped if stripped else question
+
     def extract_questions(self, text: str) -> List[str]:
         """
         Extract questions from text.
@@ -66,7 +77,9 @@ class QuestionExtractor:
         Returns:
             List of extracted question strings
         """
-        # Split into sentences, keeping the trailing '?' so it can be detected
+        # Split into sentences, keeping the trailing '?' so it can be detected.
+        # Newlines are sentence boundaries: a header or greeting on its own
+        # line must never get glued onto the next line's question.
         sentences = re.findall(r'[^.!?\n]+[.!?]?', text)
 
         questions = []
@@ -74,7 +87,7 @@ class QuestionExtractor:
             sentence = sentence.strip()
             if self.is_question(sentence):
                 # Drop trailing '.'/'!' but keep '?'
-                questions.append(sentence.rstrip('.!').strip())
+                questions.append(self.strip_greeting(sentence.rstrip('.!').strip()))
 
         return questions
 
@@ -254,13 +267,15 @@ class QuestionExtractor:
         """Extract questions from structured {'text', 'date', 'replies'} messages."""
         parsed_questions = []
         for message in messages:
-            text = self.clean_slack_markup(message['text'].replace('\n', ' '))
+            # Keep newlines: they are sentence boundaries (headers/greetings on
+            # their own line must not merge into the next line's question)
+            text = self.clean_slack_markup(message['text'])
             for question in self.extract_questions(text):
                 parsed = {
                     'text': question,
                     'normalized_text': self.normalize_question(question),
                     'date': message.get('date') or 'Unknown',
-                    'original_message': text[:200]
+                    'original_message': ' '.join(text.split())[:200]
                 }
                 if message.get('replies'):
                     parsed['replies'] = message['replies']
@@ -300,7 +315,8 @@ class QuestionExtractor:
                 text_lines.append(line)
 
             if text_lines:
-                messages.append({'text': ' '.join(text_lines), 'date': date})
+                # Newline-join: each source line stays its own sentence
+                messages.append({'text': '\n'.join(text_lines), 'date': date})
 
         return messages
 

@@ -109,12 +109,18 @@ class QuestionAnalyzer:
         messages = []
         for content in contents:
             messages.extend(self.extractor.extract_messages(content))
-        questions = self.extractor.questions_from_messages(messages)
+
+        # LLM_EXTRACTION=full: the LLM extracts (and cleans) every question
+        if self._detect_mode == 'full' and self._llm_enabled('auto'):
+            questions = self._extract_questions_llm(messages, report)
+        else:
+            questions = self.extractor.questions_from_messages(messages)
         logger.info("Found %d questions", len(questions))
         report('extracting', 1, 1)
 
         # Optional LLM pass: catch implicit help requests the regex missed
-        if self._llm_enabled(self._detect_mode):
+        # (already covered when the LLM did the whole extraction)
+        if self._detect_mode != 'full' and self._llm_enabled(self._detect_mode):
             questions += self._detect_missed_questions(messages, questions, report)
 
         if not questions:
@@ -178,13 +184,56 @@ class QuestionAnalyzer:
         report('complete', 1, 1)
         return result
 
+    def _extract_questions_llm(self, messages: List[Dict], report) -> List[Dict]:
+        """
+        LLM-first extraction (LLM_EXTRACTION=full): every message goes to the
+        LLM, which extracts and cleanly rewrites each question. Batches where
+        the LLM fails fall back to the regex extractor, so a flaky model never
+        loses questions.
+        """
+        candidates = []
+        for message in messages:
+            text = ' '.join(self.extractor.clean_slack_markup(message['text']).split())
+            if text:
+                candidates.append((text, message))
+
+        batches = [candidates[i:i + DETECT_BATCH_SIZE]
+                   for i in range(0, len(candidates), DETECT_BATCH_SIZE)]
+        logger.info("LLM-first extraction over %d message(s) in %d batch(es)...",
+                    len(candidates), len(batches))
+
+        questions = []
+        report('detecting', 0, len(batches))
+        for batch_num, batch in enumerate(batches, 1):
+            hits = self.labeler.extract_questions([text for text, _ in batch])
+            if hits is not None:  # [] is a real answer: "no questions here"
+                for hit in hits:
+                    text, message = batch[hit['index']]
+                    cleaned = self.extractor.strip_greeting(hit['question'])
+                    question = {
+                        'text': cleaned,
+                        'normalized_text': self.extractor.normalize_question(cleaned),
+                        'date': message.get('date') or 'Unknown',
+                        'original_message': text[:200],
+                        'llm_extracted': True,
+                    }
+                    if message.get('replies'):
+                        question['replies'] = message['replies']
+                    questions.append(question)
+            else:
+                # LLM failed for this batch: regex keeps us from losing questions
+                questions.extend(self.extractor.questions_from_messages(
+                    [message for _, message in batch]))
+            report('detecting', batch_num, len(batches))
+        return questions
+
     def _detect_missed_questions(self, messages: List[Dict], questions: List[Dict],
                                  report) -> List[Dict]:
         """LLM pass over messages where the regex extractor found nothing."""
         matched = {q['original_message'] for q in questions}
         unmatched = []
         for message in messages:
-            text = self.extractor.clean_slack_markup(message['text'].replace('\n', ' '))
+            text = ' '.join(self.extractor.clean_slack_markup(message['text']).split())
             if len(text) >= MIN_DETECT_MESSAGE_CHARS and text[:200] not in matched:
                 unmatched.append({'text': text, 'date': message.get('date'),
                                   'replies': message.get('replies')})

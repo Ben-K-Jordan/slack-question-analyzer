@@ -67,3 +67,40 @@ def test_parse_slack_content_with_separator_and_dates():
 def test_parse_slack_content_empty():
     extractor = QuestionExtractor()
     assert extractor.parse_slack_content("") == []
+
+
+def test_document_header_not_glued_onto_question():
+    """A header line above the date must not leak into the first question."""
+    extractor = QuestionExtractor()
+    content = (
+        "MFT Content from the Slack threads\n"
+        "June 9, 2026\n"
+        "\n"
+        "Hi Team, Can I check if the Metering Agent comes pre-installed?\n"
+    )
+    questions = extractor.parse_slack_content(content)
+    assert len(questions) == 1
+    assert questions[0]['text'] == 'Can I check if the Metering Agent comes pre-installed?'
+    assert 'MFT Content' not in questions[0]['text']
+    assert questions[0]['date'] == 'June 9, 2026'
+
+
+def test_leading_greetings_stripped():
+    extractor = QuestionExtractor()
+    assert extractor.strip_greeting('Hi Team, how do I reset?') == 'how do I reset?'
+    assert extractor.strip_greeting('Hello everyone! Hey folks, is VPN down?') == 'is VPN down?'
+    assert extractor.strip_greeting('Good morning - can someone help?') == 'can someone help?'
+    # No greeting: untouched; greeting-only: kept rather than emptied
+    assert extractor.strip_greeting('How do I reset?') == 'How do I reset?'
+    assert extractor.strip_greeting('Hi team!') == 'Hi team!'
+
+
+def test_multiline_message_keeps_sentences_apart():
+    """Lines are sentence boundaries even without punctuation."""
+    extractor = QuestionExtractor()
+    questions = extractor.questions_from_messages([{
+        'text': 'Some context line without punctuation\nHow do I configure alerts?',
+        'date': '2024-01-05',
+    }])
+    assert len(questions) == 1
+    assert questions[0]['text'] == 'How do I configure alerts?'
