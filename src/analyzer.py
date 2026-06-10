@@ -7,13 +7,18 @@ import csv
 import json
 from typing import List, Dict, Optional, Literal
 from datetime import datetime, timezone
+import numpy as np
 from dotenv import load_dotenv
 from .question_extractor import QuestionExtractor
 from .similarity_analyzer import SimilarityAnalyzer
 from .group_labeler import GroupLabeler
 
-# Cap LLM labeling to the biggest groups so it stays fast on huge transcripts
+# Caps keep the optional LLM passes fast on huge transcripts
 MAX_LABELED_GROUPS = 20
+MAX_DETECTED_MESSAGES = 40
+DETECT_BATCH_SIZE = 8
+MAX_ANSWER_CHECKS = 20
+MIN_DETECT_MESSAGE_CHARS = 20
 
 
 class QuestionAnalyzer:
@@ -49,8 +54,25 @@ class QuestionAnalyzer:
             mode = os.getenv('GROUP_LABELS', 'auto').lower()
         else:
             mode = 'on' if label_groups else 'off'
+        # GROUP_LABELS=off disables ALL LLM features (labels, verification,
+        # detection, answers, executive summary)
         self.labeler = GroupLabeler(provider) if mode in ('auto', 'on') else None
         self._labels_forced = (mode == 'on')
+
+        # Per-feature switches; each is 'auto' (use when model available),
+        # 'on', or 'off'
+        self._verify_mode = os.getenv('LLM_VERIFY_GROUPS', 'auto').lower()
+        self._detect_mode = os.getenv('LLM_EXTRACTION', 'auto').lower()
+        self._answers_mode = os.getenv('LLM_ANSWER_DETECTION', 'auto').lower()
+        self._summary_mode = os.getenv('EXECUTIVE_SUMMARY', 'auto').lower()
+
+    def _llm_enabled(self, mode: str) -> bool:
+        """Whether an optional LLM feature should run."""
+        if self.labeler is None or mode == 'off':
+            return False
+        if mode == 'on':
+            return True
+        return self._labels_forced or self.labeler.available()  # 'auto'
 
     def analyze_slack_content(self, content: str, progress_callback=None) -> Dict:
         """
@@ -72,9 +94,14 @@ class QuestionAnalyzer:
 
         report('extracting')
         print("Step 1: Extracting questions from Slack content...")
-        questions = self.extractor.parse_slack_content(content)
+        messages = self.extractor.extract_messages(content)
+        questions = self.extractor.questions_from_messages(messages)
         print(f"Found {len(questions)} questions")
         report('extracting', 1, 1)
+
+        # Optional LLM pass: catch implicit help requests the regex missed
+        if self._llm_enabled(self._detect_mode):
+            questions += self._detect_missed_questions(messages, questions, report)
 
         if not questions:
             report('complete', 1, 1)
@@ -86,10 +113,14 @@ class QuestionAnalyzer:
                 'metadata': self._metadata()
             }
 
+        verifier = (self.labeler.verify_same_topic
+                    if self._llm_enabled(self._verify_mode) else None)
+
         print("\nStep 2: Grouping similar questions using AI...")
         groups = self.similarity_analyzer.group_similar_questions(
             questions,
-            progress_callback=(lambda done, total: report('embedding', done, total))
+            progress_callback=(lambda done, total: report('embedding', done, total)),
+            verifier=verifier
         )
         print(f"Created {len(groups)} question groups")
         report('grouping', 1, 1)
@@ -104,6 +135,9 @@ class QuestionAnalyzer:
         # Optional LLM pass: name each group and summarize what's being asked
         self._label_groups(groups, report)
 
+        # Optional LLM pass: did thread replies answer the question?
+        answered_total = self._detect_answers(questions, groups, report)
+
         # Separate single-question groups
         multi_question_groups = [g for g in groups if g['count'] > 1]
         single_questions = [g for g in groups if g['count'] == 1]
@@ -113,11 +147,84 @@ class QuestionAnalyzer:
             'total_groups': len(multi_question_groups),
             'groups': multi_question_groups,
             'ungrouped_questions': [q['questions'][0] for q in single_questions],
+            'answered_questions': answered_total,
             'metadata': self._metadata()
         }
 
+        # Optional LLM pass: 2-3 sentence executive summary
+        if self._llm_enabled(self._summary_mode) and multi_question_groups:
+            report('summarizing', 0, 1)
+            print("\nGenerating executive summary...")
+            result['executive_summary'] = self.labeler.summarize_analysis(
+                multi_question_groups, len(questions))
+            report('summarizing', 1, 1)
+        else:
+            result['executive_summary'] = None
+
         report('complete', 1, 1)
         return result
+
+    def _detect_missed_questions(self, messages: List[Dict], questions: List[Dict],
+                                 report) -> List[Dict]:
+        """LLM pass over messages where the regex extractor found nothing."""
+        matched = {q['original_message'] for q in questions}
+        unmatched = []
+        for message in messages:
+            text = self.extractor.clean_slack_markup(message['text'].replace('\n', ' '))
+            if len(text) >= MIN_DETECT_MESSAGE_CHARS and text[:200] not in matched:
+                unmatched.append({'text': text, 'date': message.get('date'),
+                                  'replies': message.get('replies')})
+        unmatched = unmatched[:MAX_DETECTED_MESSAGES]
+        if not unmatched:
+            return []
+
+        print(f"Checking {len(unmatched)} unmatched messages for implicit questions...")
+        batches = [unmatched[i:i + DETECT_BATCH_SIZE]
+                   for i in range(0, len(unmatched), DETECT_BATCH_SIZE)]
+        found = []
+        report('detecting', 0, len(batches))
+        for batch_num, batch in enumerate(batches, 1):
+            for hit in self.labeler.detect_questions([m['text'] for m in batch]):
+                message = batch[hit['index']]
+                question = {
+                    'text': hit['question'],
+                    'normalized_text': self.extractor.normalize_question(hit['question']),
+                    'date': message.get('date') or 'Unknown',
+                    'original_message': message['text'][:200],
+                    'llm_detected': True,
+                }
+                if message.get('replies'):
+                    question['replies'] = message['replies']
+                found.append(question)
+            report('detecting', batch_num, len(batches))
+
+        if found:
+            print(f"LLM found {len(found)} additional question(s)")
+        return found
+
+    def _detect_answers(self, questions: List[Dict], groups: List[Dict], report) -> int:
+        """LLM pass: mark questions whose thread replies actually answered them."""
+        if not self._llm_enabled(self._answers_mode):
+            return 0
+        candidates = [q for q in questions if q.get('replies')][:MAX_ANSWER_CHECKS]
+        if not candidates:
+            return 0
+
+        print(f"\nChecking {len(candidates)} threads for answers...")
+        report('answers', 0, len(candidates))
+        answered_total = 0
+        for i, question in enumerate(candidates, 1):
+            verdict = self.labeler.is_answered(question['text'], question['replies'])
+            if verdict is not None:
+                question['answered'] = verdict
+                if verdict:
+                    answered_total += 1
+            report('answers', i, len(candidates))
+
+        # Question dicts are shared with groups, so per-group counts are free
+        for group in groups:
+            group['answered'] = sum(1 for q in group['questions'] if q.get('answered'))
+        return answered_total
 
     def _metadata(self) -> Dict:
         return {
@@ -141,7 +248,9 @@ class QuestionAnalyzer:
             print(f"\nStep 4: Generating topic labels with {self.labeler.model}...")
             report('labeling', 0, len(candidates))
             for i, group in enumerate(candidates, 1):
-                label = self.labeler.label_group([q['text'] for q in group['questions']])
+                sample = self._diverse_sample(group['questions'])
+                label = self.labeler.label_group([q['text'] for q in sample],
+                                                 keywords=group.get('keywords'))
                 if label:
                     group['topic'] = label['topic']
                     group['summary'] = label['summary']
@@ -152,6 +261,40 @@ class QuestionAnalyzer:
             if not group.get('topic'):
                 group['topic'] = self._keyword_topic(group)
                 group['summary'] = None
+
+    def _diverse_sample(self, questions: List[Dict], k: int = 8) -> List[Dict]:
+        """
+        Pick up to k questions that span the group's breadth, so the labeling
+        prompt sees different phrasings instead of the same one repeated.
+        Uses cached embeddings via greedy farthest-point selection; falls back
+        to the first k distinct phrasings when embeddings aren't cached.
+        """
+        # One entry per distinct phrasing, preserving order
+        seen = set()
+        distinct = []
+        for q in questions:
+            if q['normalized_text'] not in seen:
+                seen.add(q['normalized_text'])
+                distinct.append(q)
+        if len(distinct) <= k:
+            return distinct
+
+        cache = self.similarity_analyzer.embeddings_cache
+        vectors = [cache.get(q['normalized_text']) for q in distinct]
+        if any(v is None for v in vectors):
+            return distinct[:k]
+
+        matrix = np.array(vectors)
+        chosen = [0]  # the first (often most common) phrasing seeds the sample
+        while len(chosen) < k:
+            chosen_matrix = matrix[chosen]
+            # For each candidate, distance to its nearest already-chosen point
+            distances = np.min(
+                np.linalg.norm(matrix[:, None, :] - chosen_matrix[None, :, :], axis=2),
+                axis=1)
+            distances[chosen] = -1
+            chosen.append(int(np.argmax(distances)))
+        return [distinct[i] for i in sorted(chosen)]
 
     @staticmethod
     def _keyword_topic(group: Dict) -> str:
@@ -236,9 +379,10 @@ class QuestionAnalyzer:
             f"- **Question groups:** {results['total_groups']}",
             f"- **Unique (ungrouped) questions:** {len(results.get('ungrouped_questions', []))}",
             '',
-            '## Top Question Groups',
-            ''
         ]
+        if results.get('executive_summary'):
+            lines += ['## Executive Summary', '', results['executive_summary'], '']
+        lines += ['## Top Question Groups', '']
 
         for rank, group in enumerate(results['groups'], 1):
             title = group.get('topic') or ''

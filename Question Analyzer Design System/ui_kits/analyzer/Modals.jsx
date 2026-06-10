@@ -60,20 +60,16 @@ function UploadModal({ open, onClose, onImported }) {
 
   // Map backend progress events onto the step list and percent bar.
   const onProgress = ({ stage, completed, total }) => {
+    const share = total > 0 ? completed / total : 1;
     if (stage === 'starting') { setActiveStep(0); setProgress(2); }
-    else if (stage === 'extracting') { setActiveStep(1); setProgress(completed ? 8 : 5); }
-    else if (stage === 'embedding') {
-      setActiveStep(2);
-      const share = total > 0 ? completed / total : 1;
-      setProgress(Math.round(10 + share * 75));
-    }
-    else if (stage === 'grouping') { setActiveStep(3); setProgress(88); }
-    else if (stage === 'keywords') { setActiveStep(3); setProgress(90); }
-    else if (stage === 'labeling') {
-      setActiveStep(3);
-      const share = total > 0 ? completed / total : 1;
-      setProgress(Math.round(90 + share * 9));
-    }
+    else if (stage === 'extracting') { setActiveStep(1); setProgress(completed ? 6 : 4); }
+    else if (stage === 'detecting') { setActiveStep(1); setProgress(Math.round(6 + share * 4)); }
+    else if (stage === 'embedding') { setActiveStep(2); setProgress(Math.round(12 + share * 70)); }
+    else if (stage === 'grouping') { setActiveStep(3); setProgress(84); }
+    else if (stage === 'keywords') { setActiveStep(3); setProgress(86); }
+    else if (stage === 'labeling') { setActiveStep(3); setProgress(Math.round(86 + share * 8)); }
+    else if (stage === 'answers') { setActiveStep(3); setProgress(Math.round(94 + share * 4)); }
+    else if (stage === 'summarizing') { setActiveStep(3); setProgress(99); }
     else if (stage === 'complete') { setActiveStep(3); setProgress(100); }
   };
 

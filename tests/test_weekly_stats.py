@@ -108,6 +108,19 @@ def test_compute_weekly_stats_empty():
     assert compute_weekly_stats({'groups': [], 'ungrouped_questions': []}) is None
 
 
+def test_answered_count_for_this_week():
+    results = {
+        'groups': [],
+        'ungrouped_questions': [
+            {'text': 'a?', 'date': '2024-03-20', 'answered': True},
+            {'text': 'b?', 'date': '2024-03-19'},
+            {'text': 'c?', 'date': '2024-03-09', 'answered': True},  # last week
+        ],
+    }
+    weekly = compute_weekly_stats(results)
+    assert weekly['answered'] == 1  # only this week's answered questions count
+
+
 def test_delta_with_empty_last_week():
     results = {
         'groups': [],
