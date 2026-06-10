@@ -4,6 +4,7 @@ Main analyzer module that orchestrates question extraction, grouping, and rankin
 
 import os
 import json
+import math
 import logging
 from pathlib import Path
 from typing import List, Dict, Optional, Literal
@@ -121,6 +122,10 @@ class QuestionAnalyzer:
                         and len(messages) <= MAX_FULL_EXTRACT_MESSAGES))
         did_full = False
         if use_full and self._llm_enabled('auto'):
+            # Load the model BEFORE the first timed call: an 8B model's load
+            # time alone can blow a per-call timeout and silently downgrade
+            # the whole extraction to regex
+            self.labeler.warm_up()
             questions = self._extract_questions_llm(messages, report)
             did_full = True
         else:
@@ -144,8 +149,9 @@ class QuestionAnalyzer:
                 'metadata': self._metadata()
             }
 
-        verifier = (self.labeler.verify_same_topic
-                    if self._llm_enabled(self._verify_mode) else None)
+        verify_on = self._llm_enabled(self._verify_mode)
+        verifier = self.labeler.verify_same_topic if verify_on else None
+        auditor = self.labeler.audit_group if verify_on else None
 
         # First run ever: pre-load the bank with curated starter topics so
         # groups get good names from day one
@@ -155,15 +161,20 @@ class QuestionAnalyzer:
         groups = self.similarity_analyzer.group_similar_questions(
             questions,
             progress_callback=(lambda done, total: report('embedding', done, total)),
-            verifier=verifier
+            verifier=verifier,
+            auditor=auditor
         )
         logger.info("Created %d question groups", len(groups))
         report('grouping', 1, 1)
 
-        # Add keywords and date ranges to each group
+        # Add keywords and date ranges to each group. Keywords are scored
+        # against the whole corpus: a word common to every group ("just",
+        # "need") characterizes nothing.
         logger.info("Step 3: Extracting keywords from groups...")
+        corpus_df = self._corpus_doc_freq(questions)
         for group in groups:
-            group['keywords'] = self._extract_keywords(group['questions'])
+            group['keywords'] = self._extract_keywords(
+                group['questions'], corpus_df, len(questions))
             group['date_range'] = self._date_range(group['questions'])
         report('keywords', 1, 1)
 
@@ -538,41 +549,67 @@ class QuestionAnalyzer:
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(to_markdown(results))
 
-    def _extract_keywords(self, questions: List[Dict]) -> List[str]:
-        """
-        Extract common keywords from a group of questions.
+    # Words that characterize nothing in a support channel
+    KEYWORD_STOP_WORDS = {
+        'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+        'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'been',
+        'be', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would',
+        'could', 'should', 'may', 'might', 'can', 'this', 'that', 'these',
+        'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'what', 'which',
+        'who', 'when', 'where', 'why', 'how', 'there', 'here',
+        'just', 'need', 'needs', 'needed', 'want', 'wants', 'wanted', 'like',
+        'also', 'some', 'any', 'anyone', 'anybody', 'someone', 'something',
+        'anything', 'thoughts', 'idea', 'ideas', 'way', 'ways', 'good', 'best',
+        'really', 'please', 'thanks', 'know', 'knows', 'one', 'use', 'using',
+        'used', 'get', 'gets', 'getting', 'make', 'makes', 'possible', 'able',
+        'support', 'supports', 'supported', 'work', 'works', 'working',
+        'question', 'questions', 'help', 'team', 'guys', 'mean', 'means',
+        'instead', 'either', 'other', 'following', 'right', 'currently',
+    }
 
-        Args:
-            questions: List of question dictionaries
+    @classmethod
+    def _question_words(cls, question: Dict) -> set:
+        """Distinct meaningful words in one question."""
+        words = set()
+        for word in question['normalized_text'].lower().split():
+            word = ''.join(c for c in word if c.isalnum())
+            if len(word) > 3 and word not in cls.KEYWORD_STOP_WORDS:
+                words.add(word)
+        return words
 
-        Returns:
-            List of keywords
-        """
-        # Common words to ignore
-        stop_words = {
-            'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
-            'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'been',
-            'be', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would',
-            'could', 'should', 'may', 'might', 'can', 'this', 'that', 'these',
-            'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'what', 'which',
-            'who', 'when', 'where', 'why', 'how', 'there', 'here'
-        }
-
-        # Count word frequencies
-        word_freq = {}
+    def _corpus_doc_freq(self, questions: List[Dict]) -> Dict[str, int]:
+        """How many questions in the whole corpus contain each word."""
+        df: Dict[str, int] = {}
         for q in questions:
-            words = q['normalized_text'].lower().split()
-            for word in words:
-                # Remove non-alphanumeric characters
-                word = ''.join(c for c in word if c.isalnum())
-                if len(word) > 3 and word not in stop_words:
-                    word_freq[word] = word_freq.get(word, 0) + 1
+            for word in self._question_words(q):
+                df[word] = df.get(word, 0) + 1
+        return df
 
-        # Get top keywords
-        sorted_words = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)
-        keywords = [word for word, _ in sorted_words[:5]]
+    def _extract_keywords(self, questions: List[Dict],
+                          corpus_df: Optional[Dict[str, int]] = None,
+                          n_corpus: int = 0) -> List[str]:
+        """
+        Keywords that characterize THIS group: frequent within the group,
+        rare across the REST of the corpus (the group's own questions must
+        not penalize its defining word).
+        """
+        word_freq: Dict[str, int] = {}
+        for q in questions:
+            for word in self._question_words(q):
+                word_freq[word] = word_freq.get(word, 0) + 1
 
-        return keywords
+        n_outside = max(0, n_corpus - len(questions)) if corpus_df else 0
+
+        def score(item):
+            word, freq = item
+            if corpus_df and n_outside:
+                df_outside = max(0, corpus_df.get(word, 0) - freq)
+                idf = math.log((n_outside + 1) / (df_outside + 1))
+                return (freq * idf, freq)
+            return (float(freq), freq)
+
+        ranked = sorted(word_freq.items(), key=score, reverse=True)
+        return [word for word, _ in ranked[:5]]
 
     def print_summary(self, results: Dict):
         """

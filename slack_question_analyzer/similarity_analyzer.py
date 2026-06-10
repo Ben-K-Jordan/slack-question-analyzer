@@ -347,7 +347,8 @@ class SimilarityAnalyzer:
         return [buckets[key] for key in canonical]
 
     def group_similar_questions(self, questions: List[Dict],
-                                progress_callback=None, verifier=None) -> List[Dict]:
+                                progress_callback=None, verifier=None,
+                                auditor=None) -> List[Dict]:
         """
         Group similar questions together.
 
@@ -445,16 +446,17 @@ class SimilarityAnalyzer:
                                 "genuinely different topics",
                                 self.effective_threshold, stats['max'], stats['p90'])
 
-            # The LLM confirms every numeric pair: embeddings not trained on
-            # the domain score some UNRELATED pairs as high as true pairs, so
-            # embeddings nominate and the language model decides
-            if verifier is not None:
-                clusters = self._confirm_pair_clusters(clusters, buckets, verifier)
-
             # Tier 4: LLM double-check for merges embeddings couldn't decide
             if verifier is not None and len(clusters) > 1:
                 clusters = self._merge_borderline_clusters(clusters, similarity_matrix,
                                                            buckets, verifier)
+
+            # Final QC: the LLM audits every formed group (any size, however
+            # it formed — embeddings OR a borderline merge) and evicts clear
+            # outliers. Embeddings not trained on the domain score some
+            # unrelated pairs as high as true pairs; the audit is the decider.
+            if auditor is not None:
+                clusters = self._audit_clusters(clusters, buckets, auditor)
 
             groups = [self._build_group(indices, buckets, embeddings, similarity_matrix)
                       for indices in clusters]
@@ -601,33 +603,39 @@ class SimilarityAnalyzer:
 
         return clusters
 
-    def _confirm_pair_clusters(self, clusters: List[List[int]],
-                               buckets: List[List[Dict]], verifier) -> List[List[int]]:
+    def _audit_clusters(self, clusters: List[List[int]],
+                        buckets: List[List[Dict]], auditor) -> List[List[int]]:
         """
-        Confirm every embedding-formed pair with the LLM and split rejects.
+        Final LLM audit of every formed group: evict clear outliers.
 
         Field finding: an embedding model that wasn't trained on the domain
         scores some unrelated pairs (metering vs. cloud tokens: 0.81) as high
         as genuine pairs (0.78-0.83) — no numeric bar can separate them. The
-        verifier's domain knowledge is the decider; on uncertainty (None),
-        the numeric merge stands.
+        auditor's domain knowledge is the decider; on uncertainty (None or
+        an empty list), the numeric grouping stands. Biggest groups are
+        audited first (most damage if wrong).
         """
         max_checks = int(os.getenv('LLM_VERIFY_MAX', '10'))
         checked = 0
-        confirmed = []
-        for cluster in clusters:
-            if len(cluster) == 2 and checked < max_checks:
+        audited = []
+        for cluster in sorted(clusters, key=len, reverse=True):
+            if len(cluster) >= 2 and checked < max_checks:
                 checked += 1
-                text_a = buckets[cluster[0]][0]['text']
-                text_b = buckets[cluster[1]][0]['text']
-                if verifier([text_a], [text_b]) is False:
-                    logger.info("AI split a numeric pair (different topics): "
-                                "%.70r / %.70r", text_a, text_b)
-                    confirmed.append([cluster[0]])
-                    confirmed.append([cluster[1]])
+                texts = [buckets[idx][0]['text'] for idx in cluster]
+                outliers = auditor(texts)
+                if outliers:
+                    evicted = {cluster[i] for i in outliers}
+                    for idx in sorted(evicted):
+                        logger.info("AI evicted an outlier from a group "
+                                    "(different topic): %.90r",
+                                    buckets[idx][0]['text'])
+                        audited.append([idx])
+                    rest = [idx for idx in cluster if idx not in evicted]
+                    if rest:
+                        audited.append(rest)
                     continue
-            confirmed.append(cluster)
-        return confirmed
+            audited.append(cluster)
+        return audited
 
     def _merge_borderline_clusters(self, clusters: List[List[int]], similarity_matrix,
                                    buckets: List[List[Dict]], verifier) -> List[List[int]]:

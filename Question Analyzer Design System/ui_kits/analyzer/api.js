@@ -192,6 +192,12 @@
   function getSettings() {
     try {
       const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY));
+      // Migration: older builds seeded a numeric threshold (0.65) here without
+      // the user ever choosing one, and it silently overrode 'auto' forever.
+      // A numeric threshold now only survives if the user set it themselves.
+      if (stored && typeof stored.threshold === 'number' && !stored.userSetThreshold) {
+        stored.threshold = 'auto';
+      }
       return { ...DEFAULT_SETTINGS, ...(stored || {}) };
     } catch (err) {
       return { ...DEFAULT_SETTINGS };
@@ -200,6 +206,8 @@
 
   function setSettings(settings) {
     const merged = { ...getSettings(), ...settings };
+    if (typeof merged.threshold === 'number') merged.userSetThreshold = true;
+    else delete merged.userSetThreshold;
     try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(merged)); } catch (err) { /* private mode */ }
     return merged;
   }
