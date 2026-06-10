@@ -112,6 +112,11 @@
     }
   }
 
+  // Backend version + configuration ({version, config}).
+  function getConfig() {
+    return getJSON('/api/config');
+  }
+
   // The learned topic bank (known topics across analyses).
   async function listTopics() {
     const data = await getJSON('/api/topics');
@@ -175,7 +180,7 @@
     } catch (err) { /* job may already be finishing; polling will resolve it */ }
   }
 
-  window.QA_API = { health, latestAnalysis, listAnalyses, getAnalysis,
+  window.QA_API = { health, getConfig, latestAnalysis, listAnalyses, getAnalysis,
     deleteAnalysis, exportUrl, latestWeekly, analyze, cancelJob, pullModel, pullStatus,
     listTopics, deleteTopic, mergeTopics, renameTopic };
 
