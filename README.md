@@ -196,7 +196,7 @@ ollama pull llama3.2
 |---|---|---|
 | Topic labels | Names each group (2-4 words) and writes a one-sentence summary | `GROUP_LABELS` |
 | Group verification | Double-checks group pairs whose similarity falls just below the threshold and merges them when they're the same topic | `LLM_VERIFY_GROUPS` |
-| Question detection | Finds implicit help requests the regex extractor missed ("stuck all day, the webhook keeps timing out") and rewrites them as questions | `LLM_EXTRACTION` |
+| Question detection | Finds implicit help requests the regex extractor missed ("stuck all day, the webhook keeps timing out") and rewrites them as questions. Set `LLM_EXTRACTION=full` to have the LLM extract and clean **every** question instead (best quality, slower first run; falls back to regex if a call fails) | `LLM_EXTRACTION` |
 | Answer detection | Reads thread replies (Slack JSON exports) and decides whether each question was actually answered — feeds the "Answered" metric | `LLM_ANSWER_DETECTION` |
 | Executive summary | 2-3 sentence overview of the dominant themes, shown on the dashboard and in Markdown reports | `EXECUTIVE_SUMMARY` |
 
