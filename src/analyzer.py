@@ -452,7 +452,7 @@ class QuestionAnalyzer:
 
         # Get top keywords
         sorted_words = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)
-        keywords = [word for word, freq in sorted_words[:5]]
+        keywords = [word for word, _ in sorted_words[:5]]
 
         return keywords
 

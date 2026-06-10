@@ -3,7 +3,6 @@
 import json
 
 import numpy as np
-import pytest
 
 from src.group_labeler import GroupLabeler
 from src.analyzer import QuestionAnalyzer
