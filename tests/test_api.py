@@ -92,6 +92,58 @@ def test_latest_analysis_404_when_empty(client):
     assert client.get('/api/analyses/latest').status_code == 404
 
 
+def test_export_analysis(client, fake_engine):
+    job_id = client.post('/api/analyze', json={'content': SAMPLE_CONTENT}).get_json()['job_id']
+    analysis_id = wait_for_job(client, job_id)['analysis_id']
+
+    markdown = client.get(f'/api/analyses/{analysis_id}/export?format=md')
+    assert markdown.status_code == 200
+    assert markdown.mimetype == 'text/markdown'
+    assert b'# Question Analysis Report' in markdown.data
+    assert 'attachment' in markdown.headers['Content-Disposition']
+
+    csv_export = client.get(f'/api/analyses/{analysis_id}/export?format=csv')
+    assert csv_export.status_code == 200
+    assert csv_export.mimetype == 'text/csv'
+    assert b'group_rank' in csv_export.data
+
+    json_export = client.get(f'/api/analyses/{analysis_id}/export?format=json')
+    assert json_export.status_code == 200
+    assert json_export.get_json()['total_questions'] == 3
+
+    assert client.get(f'/api/analyses/{analysis_id}/export?format=pdf').status_code == 400
+    assert client.get('/api/analyses/nope/export?format=md').status_code == 404
+
+
+def test_delete_analysis(client, fake_engine):
+    job_id = client.post('/api/analyze', json={'content': SAMPLE_CONTENT}).get_json()['job_id']
+    analysis_id = wait_for_job(client, job_id)['analysis_id']
+
+    assert client.delete(f'/api/analyses/{analysis_id}').status_code == 200
+    assert client.get(f'/api/analyses/{analysis_id}').status_code == 404
+    assert client.get('/api/analyses').get_json()['analyses'] == []
+
+    # Deleting again 404s; traversal attempts are rejected (404 from the
+    # path check or 405 when routing diverts them to the GET-only UI route)
+    assert client.delete(f'/api/analyses/{analysis_id}').status_code == 404
+    assert client.delete('/api/analyses/..%2F..%2Fetc%2Fpasswd').status_code in (404, 405)
+
+
+def test_health_validates_azure_and_openai_keys(client, monkeypatch):
+    monkeypatch.delenv('AZURE_OPENAI_API_KEY', raising=False)
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+
+    azure = client.get('/api/health?provider=azure').get_json()
+    assert azure['status'] == 'unavailable'
+    assert 'AZURE_OPENAI_API_KEY' in azure['message']
+
+    openai_health = client.get('/api/health?provider=openai').get_json()
+    assert openai_health['status'] == 'unavailable'
+
+    monkeypatch.setenv('OPENAI_API_KEY', 'sk-test')
+    assert client.get('/api/health?provider=openai').get_json()['status'] == 'ok'
+
+
 def test_weekly_stats_endpoint(client, fake_engine):
     job_id = client.post('/api/analyze', json={'content': SAMPLE_CONTENT}).get_json()['job_id']
     finished = wait_for_job(client, job_id)

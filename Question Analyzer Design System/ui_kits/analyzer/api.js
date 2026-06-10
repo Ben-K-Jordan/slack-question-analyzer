@@ -15,14 +15,17 @@
   }
 
   // Health check — resolves with the health payload, including provider status.
-  function health() {
-    return getJSON('/api/health');
+  // Pass the provider that will be used so the right backend gets verified.
+  function health(provider) {
+    return getJSON(`/api/health${provider ? `?provider=${encodeURIComponent(provider)}` : ''}`);
   }
 
   // Most recent saved analysis, or null when none exist yet.
+  // Also records its id (window.ANALYSIS_ID) so exports target what's shown.
   async function latestAnalysis() {
     try {
       const data = await getJSON('/api/analyses/latest');
+      window.ANALYSIS_ID = data.id;
       return data.data;
     } catch (err) {
       return null;
@@ -38,7 +41,23 @@
   // Full results of one saved analysis.
   async function getAnalysis(id) {
     const data = await getJSON(`/api/analyses/${encodeURIComponent(id)}`);
+    window.ANALYSIS_ID = id;
     return data.data;
+  }
+
+  // Delete a saved analysis.
+  async function deleteAnalysis(id) {
+    const response = await fetch(`${API_BASE}/api/analyses/${encodeURIComponent(id)}`,
+      { method: 'DELETE' });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.success === false) {
+      throw new Error(data.error || `Delete failed (${response.status})`);
+    }
+  }
+
+  // Download URL for a saved analysis (format: 'md' | 'csv' | 'json').
+  function exportUrl(id, format) {
+    return `${API_BASE}/api/analyses/${encodeURIComponent(id)}/export?format=${format}`;
   }
 
   // Week-in-Review stats for the latest analysis, or null when unavailable.
@@ -68,12 +87,16 @@
       await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
       const job = await getJSON(`/api/jobs/${started.job_id}`);
       if (job.progress && onProgress) onProgress(job.progress);
-      if (job.status === 'done') return job.data;
+      if (job.status === 'done') {
+        window.ANALYSIS_ID = job.analysis_id;
+        return job.data;
+      }
       if (job.status === 'error') throw new Error(job.error || 'Analysis failed');
     }
   }
 
-  window.QA_API = { API_BASE, health, latestAnalysis, listAnalyses, getAnalysis, latestWeekly, analyze };
+  window.QA_API = { API_BASE, health, latestAnalysis, listAnalyses, getAnalysis,
+    deleteAnalysis, exportUrl, latestWeekly, analyze };
 
   // ---- Analysis settings (provider + threshold), persisted locally ----
   const SETTINGS_KEY = 'qa-analysis-settings';

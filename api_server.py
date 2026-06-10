@@ -20,19 +20,21 @@ import os
 import json
 import time
 import uuid
+import logging
 import threading
-import traceback
 from pathlib import Path
 
 import requests
-from flask import Flask, request, jsonify, send_from_directory, redirect
+from flask import Flask, request, jsonify, send_from_directory, redirect, Response
 from flask_cors import CORS
 from dotenv import load_dotenv
 
 from src.analyzer import QuestionAnalyzer
 from src.weekly_stats import compute_weekly_stats
+from src.exporters import to_csv, to_markdown
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).parent
 UI_DIR = BASE_DIR / 'Question Analyzer Design System'
@@ -41,6 +43,8 @@ ANALYSES_DIR = Path(os.getenv('ANALYSES_DIR', BASE_DIR / 'analyses'))
 VALID_PROVIDERS = ('ollama', 'azure', 'openai')
 MAX_CONTENT_MB = int(os.getenv('MAX_CONTENT_MB', '50'))
 JOB_RETENTION_SECONDS = 3600  # finished jobs are pruned after an hour
+# Local models degrade badly under parallel analyses; queue jobs by default
+MAX_CONCURRENT_JOBS = int(os.getenv('MAX_CONCURRENT_JOBS', '1'))
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_MB * 1024 * 1024
@@ -52,6 +56,7 @@ CORS(app)  # still allowed so the UI also works when opened via file://
 
 _jobs = {}
 _jobs_lock = threading.Lock()
+_job_slots = threading.Semaphore(MAX_CONCURRENT_JOBS)
 
 
 def _prune_jobs():
@@ -71,21 +76,29 @@ def _run_analysis_job(job_id, content, provider, threshold):
             if job:
                 job['progress'] = {'stage': stage, 'completed': completed, 'total': total}
 
-    try:
-        analyzer = QuestionAnalyzer(provider=provider, threshold=threshold)
-        results = analyzer.analyze_slack_content(content, progress_callback=on_progress)
-        analysis_id = _save_analysis(results)
+    # Queue behind any running analysis so a local Ollama isn't overloaded
+    with _job_slots:
         with _jobs_lock:
             job = _jobs.get(job_id)
             if job:
-                job.update(status='done', result=results, analysis_id=analysis_id,
-                           finished_at=time.time())
-    except Exception as e:
-        traceback.print_exc()
-        with _jobs_lock:
-            job = _jobs.get(job_id)
-            if job:
-                job.update(status='error', error=str(e), finished_at=time.time())
+                job['status'] = 'running'
+                job['progress'] = {'stage': 'starting', 'completed': 0, 'total': 1}
+
+        try:
+            analyzer = QuestionAnalyzer(provider=provider, threshold=threshold)
+            results = analyzer.analyze_slack_content(content, progress_callback=on_progress)
+            analysis_id = _save_analysis(results)
+            with _jobs_lock:
+                job = _jobs.get(job_id)
+                if job:
+                    job.update(status='done', result=results, analysis_id=analysis_id,
+                               finished_at=time.time())
+        except Exception as e:
+            logger.exception("Analysis job %s failed", job_id)
+            with _jobs_lock:
+                job = _jobs.get(job_id)
+                if job:
+                    job.update(status='error', error=str(e), finished_at=time.time())
 
 
 # ---------------------------------------------------------------------------
@@ -154,8 +167,12 @@ def ui_assets(asset_path):
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    """Health check that verifies the configured provider is reachable."""
-    provider = os.getenv('AI_PROVIDER', 'ollama')
+    """
+    Health check that verifies the provider is usable.
+    Pass ?provider=ollama|azure|openai to check a specific one
+    (defaults to the configured AI_PROVIDER).
+    """
+    provider = request.args.get('provider') or os.getenv('AI_PROVIDER', 'ollama')
     health = {'status': 'ok', 'provider': provider}
 
     if provider == 'ollama':
@@ -182,6 +199,15 @@ def health_check():
             health['ollama'] = {'reachable': False, 'model': model, 'model_available': False}
             health['message'] = (f"Cannot reach Ollama at {ollama_url} ({e.__class__.__name__}). "
                                  "Start it with: ollama serve")
+    elif provider == 'azure':
+        if not (os.getenv('AZURE_OPENAI_API_KEY') and os.getenv('AZURE_OPENAI_ENDPOINT')):
+            health['status'] = 'unavailable'
+            health['message'] = ("Azure provider requires AZURE_OPENAI_API_KEY and "
+                                 "AZURE_OPENAI_ENDPOINT in the backend's .env file.")
+    elif provider == 'openai':
+        if not os.getenv('OPENAI_API_KEY'):
+            health['status'] = 'unavailable'
+            health['message'] = "OpenAI provider requires OPENAI_API_KEY in the backend's .env file."
 
     return jsonify(health)
 
@@ -229,8 +255,8 @@ def analyze_transcript():
     with _jobs_lock:
         _prune_jobs()
         _jobs[job_id] = {
-            'status': 'running',
-            'progress': {'stage': 'starting', 'completed': 0, 'total': 1},
+            'status': 'queued',
+            'progress': {'stage': 'queued', 'completed': 0, 'total': 1},
             'result': None,
             'analysis_id': None,
             'error': None,
@@ -320,6 +346,40 @@ def get_analysis(analysis_id):
     return jsonify({'success': True, 'id': analysis_id, 'data': data})
 
 
+@app.route('/api/analyses/<analysis_id>', methods=['DELETE'])
+def delete_analysis(analysis_id):
+    """Delete a saved analysis."""
+    path = (ANALYSES_DIR / f"{analysis_id}.json").resolve()
+    if path.parent != ANALYSES_DIR.resolve() or not path.is_file():
+        return jsonify({'success': False, 'error': 'Analysis not found'}), 404
+    path.unlink()
+    return jsonify({'success': True})
+
+
+@app.route('/api/analyses/<analysis_id>/export', methods=['GET'])
+def export_analysis(analysis_id):
+    """Download a saved analysis as Markdown, CSV, or JSON."""
+    data = _load_analysis(analysis_id)
+    if data is None:
+        return jsonify({'success': False, 'error': 'Analysis not found'}), 404
+
+    fmt = request.args.get('format', 'json').lower()
+    if fmt in ('md', 'markdown'):
+        content, mimetype, ext = to_markdown(data), 'text/markdown', 'md'
+    elif fmt == 'csv':
+        content, mimetype, ext = to_csv(data), 'text/csv', 'csv'
+    elif fmt == 'json':
+        content = json.dumps(data, indent=2, ensure_ascii=False)
+        mimetype, ext = 'application/json', 'json'
+    else:
+        return jsonify({'success': False,
+                        'error': f"Unknown format '{fmt}'. Use md, csv, or json."}), 400
+
+    return Response(content, mimetype=mimetype, headers={
+        'Content-Disposition': f'attachment; filename="analysis-{analysis_id}.{ext}"'
+    })
+
+
 @app.route('/api/config', methods=['GET'])
 def get_config():
     """Get current configuration"""
@@ -347,6 +407,10 @@ def internal_error(_e):
 
 
 if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+
     host = os.getenv('API_HOST', '127.0.0.1')
     port = int(os.getenv('API_PORT', '5000'))
     debug = os.getenv('FLASK_DEBUG', '').lower() in ('1', 'true', 'on')

@@ -7,6 +7,7 @@ Groups similar questions together using semantic similarity.
 import os
 import json
 import time
+import logging
 import hashlib
 import tempfile
 from pathlib import Path
@@ -18,6 +19,8 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 from openai import AzureOpenAI, OpenAI
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 
 class EmbeddingError(Exception):
@@ -75,7 +78,7 @@ class EmbeddingCache:
             self._dirty = False
         except OSError as e:
             # Cache persistence is best-effort; analysis results are unaffected
-            print(f"Warning: could not save embedding cache: {e}")
+            logger.warning("Could not save embedding cache: %s", e)
 
 
 class SimilarityAnalyzer:
@@ -173,8 +176,8 @@ class SimilarityAnalyzer:
                 last_error = e
                 if attempt < self.MAX_RETRIES:
                     delay = self.RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1))
-                    print(f"Warning: {description} failed (attempt {attempt}/"
-                          f"{self.MAX_RETRIES}): {e}. Retrying in {delay:.0f}s...")
+                    logger.warning("%s failed (attempt %d/%d): %s. Retrying in %.0fs...",
+                                   description, attempt, self.MAX_RETRIES, e, delay)
                     time.sleep(delay)
         raise EmbeddingError(f"{description} failed after {self.MAX_RETRIES} attempts: {last_error}") from last_error
 
@@ -267,8 +270,8 @@ class SimilarityAnalyzer:
                 seen.add(text)
 
         if unique_uncached:
-            print(f"Fetching {len(unique_uncached)} new embeddings "
-                  f"({len(texts) - len(unique_uncached)} cached)...")
+            logger.info("Fetching %d new embeddings (%d cached)...",
+                        len(unique_uncached), len(texts) - len(unique_uncached))
 
         total = len(unique_uncached)
         completed = 0
@@ -373,13 +376,13 @@ class SimilarityAnalyzer:
         if not questions:
             return []
 
-        print(f"Analyzing {len(questions)} questions...")
+        logger.info("Analyzing %d questions...", len(questions))
 
         # Tiers 1-2: merge duplicates without AI
         buckets = self._dedupe_questions(questions)
         if len(buckets) < len(questions):
-            print(f"Deduplicated to {len(buckets)} distinct questions "
-                  f"({len(questions) - len(buckets)} duplicates merged without AI)")
+            logger.info("Deduplicated to %d distinct questions (%d duplicates merged without AI)",
+                        len(buckets), len(questions) - len(buckets))
 
         # A single distinct question needs no embeddings at all
         if len(buckets) == 1:
@@ -462,7 +465,7 @@ class SimilarityAnalyzer:
         if not candidates:
             return clusters
 
-        print(f"Verifying {len(candidates)} borderline group pair(s) with the LLM...")
+        logger.info("Verifying %d borderline group pair(s) with the LLM...", len(candidates))
         parent = list(range(len(clusters)))
 
         def find(x):
@@ -484,7 +487,7 @@ class SimilarityAnalyzer:
                 merged_count += 1
 
         if merged_count:
-            print(f"LLM verification merged {merged_count} borderline group pair(s)")
+            logger.info("LLM verification merged %d borderline group pair(s)", merged_count)
         return [clusters[i] for i in range(len(clusters)) if find(i) == i]
 
     def _build_group(self, group_indices: List[int], buckets: List[List[Dict]],

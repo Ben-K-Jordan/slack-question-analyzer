@@ -5,8 +5,6 @@ function App() {
   const [uploadOpen, setUploadOpen] = React.useState(false);
   const [historyOpen, setHistoryOpen] = React.useState(false);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
-  const [signInOpen, setSignInOpen] = React.useState(false);
-  const [account, setAccount] = React.useState(null);
 
   const showAnalysis = (data) => {
     window.ANALYSIS_RESULTS = data;
@@ -15,19 +13,10 @@ function App() {
     setAnalysisVersion((v) => v + 1);
   };
 
-  const connect = (email) => {
-    const base = email.split('@')[0].replace(/[^a-z]/gi, '');
-    const initials = (base.slice(0, 2) || 'me').toUpperCase();
-    setAccount({ email, initials });
-    setSignInOpen(false);
-  };
-  const disconnect = () => { setAccount(null); setSignInOpen(false); };
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#fff' }}>
       <AppHeader view={view} setView={setView} onUpload={() => setUploadOpen(true)}
-        onHistory={() => setHistoryOpen(true)} onSettings={() => setSettingsOpen(true)}
-        account={account} onAvatar={() => setSignInOpen(true)} onManage={() => setSignInOpen(true)} />
+        onHistory={() => setHistoryOpen(true)} onSettings={() => setSettingsOpen(true)} />
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', background: '#fff' }}>
         <div key={`${view}:${analysisVersion}`} className="qa-view">
           {view === 'dashboard' ? <DashboardView /> : <WeekView />}
@@ -37,8 +26,6 @@ function App() {
         onImported={() => { setUploadOpen(false); setView('dashboard'); setAnalysisVersion((v) => v + 1); }} />
       <HistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)} onLoad={showAnalysis} />
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
-      <SignInModal open={signInOpen} onClose={() => setSignInOpen(false)}
-        account={account} onConnect={connect} onDisconnect={disconnect} />
     </div>
   );
 }

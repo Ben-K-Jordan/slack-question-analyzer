@@ -18,10 +18,13 @@ Capabilities (all optional — the pipeline works without any of them):
 import os
 import json
 import re
+import logging
 from typing import Dict, List, Optional
 
 import requests
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 MAX_QUESTIONS_IN_PROMPT = 8
 MAX_TOPIC_WORDS = 6
@@ -256,7 +259,7 @@ class GroupLabeler:
                     return data
             return None
         except Exception as e:
-            print(f"Warning: LLM call failed ({e})")
+            logger.warning("LLM call failed: %s", e)
             return None
 
     # ------------------------------------------------------------------
