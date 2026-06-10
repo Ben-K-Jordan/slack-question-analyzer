@@ -1,0 +1,26 @@
+<!-- @dsCard group="Brand" viewport="700x150" name="Product wordmark" subtitle="Ranked-bars glyph + IBM Plex wordmark · on light and dark" -->
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8" /><link rel="stylesheet" href="../styles.css" />
+<style>body{margin:0;padding:0;display:grid;grid-template-columns:1fr 1fr;font-family:var(--font-sans)}
+.panel{padding:28px 32px;display:flex;align-items:center;gap:16px}
+.light{background:#fff}
+.dark{background:var(--gray-100)}
+.wm{display:flex;flex-direction:column;line-height:1.1}
+.t1{font-size:20px;font-weight:600;letter-spacing:-.2px}
+.t2{font-size:20px;font-weight:300;letter-spacing:-.2px}
+.mark{width:44px;height:44px;flex:0 0 44px;background:#161616;position:relative}
+.dark .mark{background:#fff}
+.b{position:absolute;height:5px}
+.b1{left:9px;top:11px;width:26px;background:var(--blue-60)}
+.b2{left:9px;top:20px;width:18px;background:var(--blue-50)}
+.b3{left:9px;top:29px;width:11px;background:var(--blue-40)}</style></head>
+<body>
+<div class="panel light">
+  <span class="mark"><span class="b b1"></span><span class="b b2"></span><span class="b b3"></span></span>
+  <span class="wm"><span class="t1" style="color:#161616">Question</span><span class="t2" style="color:#525252">Analyzer</span></span>
+</div>
+<div class="panel dark">
+  <span class="mark"><span class="b b1"></span><span class="b b2"></span><span class="b b3"></span></span>
+  <span class="wm"><span class="t1" style="color:#fff">Question</span><span class="t2" style="color:#c6c6c6">Analyzer</span></span>
+</div>
+</body></html>

@@ -1,0 +1,25 @@
+<!-- @dsCard group="Spacing" viewport="700x150" name="Radii & elevation" subtitle="Carbon stays sharp; shadows are restrained and cool" -->
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8" /><link rel="stylesheet" href="../styles.css" />
+<style>body{margin:0;padding:24px;background:var(--gray-10);font-family:var(--font-sans)}
+.wrap{display:flex;gap:28px;align-items:flex-end}
+.col{display:flex;gap:18px}
+.item{display:flex;flex-direction:column;align-items:center;gap:8px}
+.box{width:72px;height:48px;background:#fff;border:1px solid var(--border-subtle)}
+.cap{font-family:var(--font-mono);font-size:10px;color:var(--text-helper)}
+.div{width:1px;align-self:stretch;background:var(--border-subtle)}</style></head>
+<body>
+<div class="wrap">
+  <div class="col">
+    <div class="item"><div class="box" style="border-radius:0"></div><span class="cap">none ★</span></div>
+    <div class="item"><div class="box" style="border-radius:2px"></div><span class="cap">sm 2px</span></div>
+    <div class="item"><div class="box" style="border-radius:4px"></div><span class="cap">md 4px</span></div>
+  </div>
+  <div class="div"></div>
+  <div class="col">
+    <div class="item"><div class="box" style="border:none;box-shadow:var(--shadow-sm)"></div><span class="cap">sm</span></div>
+    <div class="item"><div class="box" style="border:none;box-shadow:var(--shadow-md)"></div><span class="cap">md</span></div>
+    <div class="item"><div class="box" style="border:none;box-shadow:var(--shadow-lg)"></div><span class="cap">lg</span></div>
+  </div>
+</div>
+</body></html>

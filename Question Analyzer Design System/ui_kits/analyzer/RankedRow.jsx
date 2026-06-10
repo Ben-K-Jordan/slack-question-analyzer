@@ -1,0 +1,72 @@
+// Animated, expandable ranked question row — shared by Dashboard & Week.
+function RankedRow({ rank, question, count, maxCount, keywords = [], movement = null,
+  similarity = null, questions = null, index = 0, defaultOpen = false }) {
+  const [open, setOpen] = React.useState(defaultOpen);
+  const [hover, setHover] = React.useState(false);
+  const [shown, setShown] = React.useState(false);
+  const bodyRef = React.useRef(null);
+  const [bodyH, setBodyH] = React.useState(0);
+  const expandable = !!(questions && questions.length);
+
+  React.useEffect(() => { const id = setTimeout(() => setShown(true), 80 + index * 70); return () => clearTimeout(id); }, []);
+  React.useEffect(() => { if (bodyRef.current) setBodyH(bodyRef.current.scrollHeight); }, [open, questions]);
+
+  const heat = rank === 1 ? 'var(--blue-60)' : rank === 2 ? 'var(--blue-50)' : rank === 3 ? 'var(--blue-40)' : 'var(--gray-40)';
+  const pct = Math.max(6, Math.round((count / Math.max(1, maxCount)) * 100));
+
+  return (
+    <div style={{
+      borderBottom: '1px solid var(--border-subtle)',
+      background: hover ? 'var(--layer-hover)' : 'transparent',
+      borderLeft: `3px solid ${open ? heat : 'transparent'}`,
+      transition: 'background var(--duration-base) var(--ease-productive), border-left-color var(--duration-base), opacity 480ms var(--ease-entrance), transform 480ms var(--ease-entrance)',
+      opacity: shown ? 1 : 0, transform: shown ? 'none' : 'translateY(10px)',
+    }}>
+      <div onClick={() => expandable && setOpen(!open)}
+        onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+        style={{
+          display: 'grid', gridTemplateColumns: movement != null ? '30px 52px 1fr 168px 46px 22px' : '34px 1fr 168px 46px 22px',
+          alignItems: 'center', gap: 16, padding: '15px 20px', cursor: expandable ? 'pointer' : 'default',
+        }}>
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 18, color: heat, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{String(rank).padStart(2, '0')}</span>
+        {movement != null ? <span><MovementBadge movement={movement} /></span> : null}
+        <span style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 15, color: 'var(--text-primary)', lineHeight: 1.3, whiteSpace: open ? 'normal' : 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{question}</div>
+          {keywords.length ? (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 6 }}>
+              {keywords.slice(0, 4).map((k, i) => (
+                <span key={i} style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-helper)', background: 'var(--gray-10)', padding: '1px 7px' }}>{k}</span>
+              ))}
+            </div>
+          ) : null}
+        </span>
+        <Bar pct={pct} color={heat} height={8} delay={index * 70} duration={1000} />
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 15, fontWeight: 500, textAlign: 'right', color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>{count}×</span>
+        <span style={{ display: 'inline-flex', justifyContent: 'center', color: 'var(--text-secondary)', opacity: expandable ? 1 : 0, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform var(--duration-moderate) var(--ease-productive)' }}>
+          <Icon name="chevron-down" size={16} />
+        </span>
+      </div>
+
+      {expandable ? (
+        <div style={{ maxHeight: open ? bodyH : 0, overflow: 'hidden', transition: 'max-height var(--duration-slow) var(--ease-productive)' }}>
+          <div ref={bodyRef} style={{ padding: '0 20px 18px', marginLeft: movement != null ? 98 : 50 }}>
+            {similarity ? <div style={{ fontSize: 12, color: 'var(--text-helper)', marginBottom: 10 }}>Avg. similarity <b style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>{similarity}</b> · {questions.length} occurrences</div> : null}
+            <ul style={{ listStyle: 'none', margin: 0, padding: 0, borderLeft: '1px solid var(--border-subtle)' }}>
+              {questions.map((q, i) => (
+                <li key={i} style={{
+                  display: 'flex', justifyContent: 'space-between', gap: 16, padding: '8px 16px',
+                  opacity: open ? 1 : 0, transform: open ? 'none' : 'translateX(-6px)',
+                  transition: `opacity 360ms ${i * 70}ms var(--ease-entrance), transform 360ms ${i * 70}ms var(--ease-entrance)`,
+                }}>
+                  <span style={{ fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>{q.text}</span>
+                  {q.date ? <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-placeholder)', whiteSpace: 'nowrap' }}>{q.date}</span> : null}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+window.RankedRow = RankedRow;
