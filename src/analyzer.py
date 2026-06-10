@@ -10,13 +10,18 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 from .question_extractor import QuestionExtractor
 from .similarity_analyzer import SimilarityAnalyzer
+from .group_labeler import GroupLabeler
+
+# Cap LLM labeling to the biggest groups so it stays fast on huge transcripts
+MAX_LABELED_GROUPS = 20
 
 
 class QuestionAnalyzer:
     """Main analyzer class that coordinates the analysis pipeline."""
 
     def __init__(self, provider: Optional[Literal['azure', 'openai', 'ollama']] = None,
-                 use_disk_cache: bool = True, threshold: Optional[float] = None):
+                 use_disk_cache: bool = True, threshold: Optional[float] = None,
+                 label_groups: Optional[bool] = None):
         """
         Initialize the analyzer.
 
@@ -26,6 +31,9 @@ class QuestionAnalyzer:
             use_disk_cache: Persist embeddings to disk so repeat runs are fast
             threshold: Similarity threshold (0-1). Overrides the
                        SIMILARITY_THRESHOLD env variable when given.
+            label_groups: Generate LLM topic labels/summaries per group.
+                          None (default) reads GROUP_LABELS env: 'auto' labels
+                          when a generation model is available, 'on'/'off' force it.
         """
         load_dotenv()
 
@@ -36,6 +44,13 @@ class QuestionAnalyzer:
         self.similarity_analyzer = SimilarityAnalyzer(provider=provider,
                                                       use_disk_cache=use_disk_cache,
                                                       threshold=threshold)
+
+        if label_groups is None:
+            mode = os.getenv('GROUP_LABELS', 'auto').lower()
+        else:
+            mode = 'on' if label_groups else 'off'
+        self.labeler = GroupLabeler(provider) if mode in ('auto', 'on') else None
+        self._labels_forced = (mode == 'on')
 
     def analyze_slack_content(self, content: str, progress_callback=None) -> Dict:
         """
@@ -86,6 +101,9 @@ class QuestionAnalyzer:
             group['date_range'] = self._date_range(group['questions'])
         report('keywords', 1, 1)
 
+        # Optional LLM pass: name each group and summarize what's being asked
+        self._label_groups(groups, report)
+
         # Separate single-question groups
         multi_question_groups = [g for g in groups if g['count'] > 1]
         single_questions = [g for g in groups if g['count'] == 1]
@@ -108,6 +126,40 @@ class QuestionAnalyzer:
             'model': self.similarity_analyzer.embedding_model,
             'provider': self.similarity_analyzer.provider
         }
+
+    def _label_groups(self, groups: List[Dict], report):
+        """
+        Give each group a 'topic' (and, when an LLM is available, a 'summary').
+
+        Multi-question groups get LLM-generated labels when a generation model
+        is configured and reachable; everything else falls back to keywords.
+        """
+        candidates = [g for g in groups if g['count'] > 1][:MAX_LABELED_GROUPS]
+        use_llm = self.labeler is not None and (self._labels_forced or self.labeler.available())
+
+        if use_llm and candidates:
+            print(f"\nStep 4: Generating topic labels with {self.labeler.model}...")
+            report('labeling', 0, len(candidates))
+            for i, group in enumerate(candidates, 1):
+                label = self.labeler.label_group([q['text'] for q in group['questions']])
+                if label:
+                    group['topic'] = label['topic']
+                    group['summary'] = label['summary']
+                report('labeling', i, len(candidates))
+
+        # Keyword fallback for anything the LLM didn't (or couldn't) label
+        for group in groups:
+            if not group.get('topic'):
+                group['topic'] = self._keyword_topic(group)
+                group['summary'] = None
+
+    @staticmethod
+    def _keyword_topic(group: Dict) -> str:
+        keywords = group.get('keywords') or []
+        if keywords:
+            return ' / '.join(k.capitalize() for k in keywords[:2])
+        words = group['representative_question'].split()[:4]
+        return ' '.join(words)
 
     @staticmethod
     def _date_range(questions: List[Dict]) -> Dict:
@@ -189,10 +241,14 @@ class QuestionAnalyzer:
         ]
 
         for rank, group in enumerate(results['groups'], 1):
-            lines.append(f"### #{rank} — asked {group['count']} times")
+            title = group.get('topic') or ''
+            lines.append(f"### #{rank} — {title + ' — ' if title else ''}asked {group['count']} times")
             lines.append('')
             lines.append(f"**{group['representative_question']}**")
             lines.append('')
+            if group.get('summary'):
+                lines.append(group['summary'])
+                lines.append('')
             if group.get('keywords'):
                 lines.append(f"Keywords: {', '.join(group['keywords'])}")
             date_range = group.get('date_range') or {}

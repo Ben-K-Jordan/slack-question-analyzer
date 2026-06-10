@@ -22,6 +22,7 @@ def client(tmp_path, monkeypatch):
 @pytest.fixture
 def fake_engine(monkeypatch):
     """Make QuestionAnalyzer run instantly with deterministic embeddings."""
+    monkeypatch.setenv('GROUP_LABELS', 'off')  # no LLM calls in tests
     vectors = {
         'how do i reset my password?': [1.0, 0.0, 0.0],
         'how can i reset my password?': [0.99, 0.05, 0.0],

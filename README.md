@@ -4,8 +4,14 @@ AI-powered tool that analyzes Slack questions, groups similar ones together, and
 
 ## Features
 
-- **Question Extraction**: Automatically extracts questions from Slack message dumps
+- **Question Extraction**: Automatically extracts questions from Slack message dumps —
+  plain text, Slack JSON exports, or CSV (format auto-detected), with Slack markup
+  (mentions, links, emoji, code blocks) stripped automatically
+- **Tiered Grouping**: Exact and near-duplicate questions are merged with cheap string
+  comparison first — the AI provider is only called for genuinely distinct questions
 - **AI-Powered Grouping**: Uses embeddings to group semantically similar questions
+- **LLM Topic Labels** (optional): A local Ollama chat model (or OpenAI/Azure) names
+  each group and writes a one-sentence summary of what people are asking
 - **Multiple AI Providers**: 
   - **Ollama** (Local, Free) - Recommended for privacy and cost
   - **Azure OpenAI** (Copilot integration)
@@ -113,9 +119,11 @@ Check if your input file is formatted correctly:
 python -m src.cli validate example_input.txt
 ```
 
-## Input Format
+## Input Formats
 
-The tool expects Slack content in the following format:
+The input format is detected automatically:
+
+**Plain text** with dashed separators (see `example_input.txt`):
 
 ```
 Date
@@ -130,7 +138,44 @@ Another question or message...
 -----------------------------------------------------------
 ```
 
-See `example_input.txt` for a complete example.
+**Slack JSON export** — a list of message objects (or `{"messages": [...]}`); Slack
+epoch timestamps (`ts`) are converted to dates automatically:
+
+```json
+[
+  {"type": "message", "user": "U123", "text": "How do I reset my password?", "ts": "1704412800.000100"}
+]
+```
+
+**CSV** with a `text`/`message`/`question` column and an optional `date`/`ts`/`timestamp` column:
+
+```csv
+date,message
+2024-01-05,How do I reset my password?
+```
+
+## LLM Topic Labels
+
+When a generation model is available, each question group gets a short topic name and a
+one-sentence summary (shown in the dashboard and Markdown reports). With Ollama:
+
+```bash
+ollama pull llama3.2
+```
+
+Configuration in `.env`:
+
+```env
+# 'auto' (default): label when a generation model is available; 'on' / 'off' to force
+GROUP_LABELS=auto
+# Ollama chat model used for labeling (default: llama3.2)
+OLLAMA_GENERATION_MODEL=llama3.2
+# For openai provider: CHAT_MODEL (default gpt-4o-mini)
+# For azure provider: AZURE_OPENAI_CHAT_DEPLOYMENT (labeling is off unless set)
+```
+
+Without a generation model, groups fall back to keyword-based topic names — the
+analysis itself never depends on the LLM. Use `--no-labels` on the CLI to skip labeling.
 
 ## Output Format
 

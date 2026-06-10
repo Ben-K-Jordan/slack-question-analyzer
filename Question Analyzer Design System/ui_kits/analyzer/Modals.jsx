@@ -67,8 +67,13 @@ function UploadModal({ open, onClose, onImported }) {
       const share = total > 0 ? completed / total : 1;
       setProgress(Math.round(10 + share * 75));
     }
-    else if (stage === 'grouping') { setActiveStep(3); setProgress(90); }
-    else if (stage === 'keywords') { setActiveStep(3); setProgress(95); }
+    else if (stage === 'grouping') { setActiveStep(3); setProgress(88); }
+    else if (stage === 'keywords') { setActiveStep(3); setProgress(90); }
+    else if (stage === 'labeling') {
+      setActiveStep(3);
+      const share = total > 0 ? completed / total : 1;
+      setProgress(Math.round(90 + share * 9));
+    }
     else if (stage === 'complete') { setActiveStep(3); setProgress(100); }
   };
 

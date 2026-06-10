@@ -102,7 +102,8 @@ function WeekView() {
       <div style={{ borderTop: '2px solid var(--gray-100)', borderBottom: '1px solid var(--border-subtle)', background: '#fff' }}>
         {d.groups.map((g, i) => (
           <RankedRow key={g.rank} rank={g.rank} index={i} question={g.question} count={g.count}
-            maxCount={max} keywords={g.keywords} movement={g.movement} />
+            maxCount={max} keywords={g.keywords} movement={g.movement}
+            topic={g.topic} similarity={g.similarity} questions={g.questions} />
         ))}
       </div>
     </div>
