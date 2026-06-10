@@ -54,6 +54,14 @@ VERIFY_SCHEMA = {
     'required': ['same_topic'],
 }
 
+AUDIT_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'outliers': {'type': 'array', 'items': {'type': 'integer'}},
+    },
+    'required': ['outliers'],
+}
+
 SUMMARY_SCHEMA = {
     'type': 'object',
     'properties': {'summary': {'type': 'string'}},
@@ -138,6 +146,26 @@ VERIFY_SYSTEM = (
     "Respond with JSON only."
 )
 
+# The audit has the OPPOSITE bias to VERIFY_SYSTEM: these questions were
+# already matched, so evicting needs confidence, keeping doesn't. A strict
+# doubt-means-no rule here would shred legitimate groups.
+AUDIT_SYSTEM = (
+    "You quality-check a group of support questions that were matched as being "
+    "about one topic. List the numbers of any questions that are CLEARLY about "
+    "a different feature or task than the rest of the group. Differences in "
+    "wording, angle, or detail level do NOT make a question an outlier — only "
+    "a different subject does. If the group is coherent, or you are unsure, "
+    "return an empty list.\n\n"
+    "Example: 1. How do I install the metering agent? 2. How do I set up "
+    "monitoring alerts? 3. Can monitoring alert on one application? "
+    "Question 1 is about metering, the rest about monitoring/alerting: "
+    "{\"outliers\": [1]}\n"
+    "Example: 1. Any good examples of using e2e monitoring? 2. How are real "
+    "clients using monitoring/alerting? Same subject, different wording: "
+    "{\"outliers\": []}\n\n"
+    "Respond with JSON only."
+)
+
 SUMMARY_SYSTEM = (
     "You write a brief executive summary of support-question analytics for a team lead. "
     "2-3 sentences: the dominant themes, with concrete topic names and counts. "
@@ -169,7 +197,13 @@ EXTRACT_SYSTEM = (
     "You extract every question and request for help from Slack messages.\n"
     "Rules:\n"
     "- Rewrite each one as a clear, self-contained question, dropping greetings "
-    "('Hi team'), signatures, and filler.\n"
+    "('Hi team'), signatures, bullet characters, and filler.\n"
+    "- Self-contained means understandable with no other context: pull the "
+    "subject (product, feature, file, error) into the question from the rest "
+    "of the message. 'Can we configure the following tasks to do this?' is "
+    "NOT self-contained.\n"
+    "- Skip pure conversational filler that has no subject even in context "
+    "('Any thoughts?', 'Is there any way around this?', 'Anyone?').\n"
     "- Keep exact technical terms, product names, error messages, and version numbers "
     "verbatim — never paraphrase or invent details that aren't in the message.\n"
     "- A message may contain several questions: output one entry per question, "
@@ -186,11 +220,16 @@ EXTRACT_FEW_SHOT = """Example messages:
 0. Hi all! Quick one — can we trigger transfers via REST instead of the scheduler? Also is there a way to bulk-disable actions?
 1. Deployed the fix to prod this morning, all green.
 2. been fighting the SFTP connection all day, keeps refusing, no idea why
+3. The proxy keeps stripping our auth header. * can we pin the header? Is there any way around this? Anyone have any thoughts?
 
 Example answer: {"questions": [
 {"index": 0, "question": "Can we trigger transfers via REST instead of the scheduler?"},
 {"index": 0, "question": "Is there a way to bulk-disable actions?"},
-{"index": 2, "question": "Why does my SFTP connection keep getting refused?"}]}
+{"index": 2, "question": "Why does my SFTP connection keep getting refused?"},
+{"index": 3, "question": "Can we pin the auth header so the proxy stops stripping it?"}]}
+
+(Note how message 3 yields ONE self-contained question: the bullet is folded
+into the subject, and the contentless follow-ups are skipped.)
 
 Now extract from these messages."""
 
@@ -209,13 +248,15 @@ ANSWERED_SYSTEM = (
 class GroupLabeler:
     """LLM prompting layer (labels, verification, summaries, detection)."""
 
-    REQUEST_TIMEOUT_SECONDS = 60
     KEEP_ALIVE = '10m'
     SEED = 42
 
     def __init__(self, provider: str = 'ollama'):
         load_dotenv()
         self.provider = provider
+        # 8B models on CPU can take well over a minute per call; a short
+        # timeout silently downgrades the whole pipeline to regex
+        self.timeout = int(os.getenv('LLM_TIMEOUT', '180'))
         self._available: Optional[bool] = None
         self._client = None
 
@@ -286,6 +327,25 @@ class GroupLabeler:
             return bool(self.model and os.getenv('AZURE_OPENAI_API_KEY'))
         return bool(os.getenv('OPENAI_API_KEY'))  # openai
 
+    def warm_up(self) -> None:
+        """
+        Load the Ollama model into memory before the first real call.
+
+        Model load alone can exceed a per-call timeout, making the first
+        calls fail and the pipeline silently fall back to regex. An empty
+        chat request loads the model without generating anything.
+        """
+        if self.provider != 'ollama' or not self.model:
+            return
+        try:
+            logger.info("Loading chat model '%s' into memory...", self.model)
+            requests.post(f"{self.ollama_url}/api/chat",
+                          json={'model': self.model, 'messages': [],
+                                'keep_alive': self.KEEP_ALIVE},
+                          timeout=max(self.timeout, 600))
+        except requests.RequestException as e:
+            logger.warning("Chat model warm-up failed: %s", e)
+
     # ------------------------------------------------------------------
     # Generation core
     # ------------------------------------------------------------------
@@ -304,7 +364,7 @@ class GroupLabeler:
                                 'num_predict': max_tokens},
                     'keep_alive': self.KEEP_ALIVE,  # stay loaded across our call series
                 },
-                timeout=self.REQUEST_TIMEOUT_SECONDS,
+                timeout=self.timeout,
             )
             response.raise_for_status()
             return response.json().get('message', {}).get('content', '')
@@ -438,6 +498,28 @@ class GroupLabeler:
         if data is None or not isinstance(data.get('same_topic'), bool):
             return None
         return data['same_topic']
+
+    def audit_group(self, questions: List[str]) -> Optional[List[int]]:
+        """
+        Quality-check a formed group: 0-based indices of questions that
+        clearly don't belong, [] when coherent, None when the LLM is
+        unavailable/uncertain (callers keep the group as-is).
+        """
+        sample = questions[:MAX_QUESTIONS_IN_PROMPT]
+        user = ('Group of matched questions:\n' +
+                '\n'.join(f"{i + 1}. {q}" for i, q in enumerate(sample)) +
+                '\n\nWhich question numbers (if any) are clearly about a '
+                'different subject than the rest?')
+        data = self._generate_json(self._system(AUDIT_SYSTEM), user, AUDIT_SCHEMA,
+                                   max_tokens=60)
+        if data is None or not isinstance(data.get('outliers'), list):
+            return None
+        outliers = [int(i) - 1 for i in data['outliers']
+                    if isinstance(i, int) and 1 <= i <= len(sample)]
+        # "Everything is an outlier" is not a meaningful audit verdict
+        if len(outliers) >= len(sample):
+            return None
+        return outliers
 
     def summarize_analysis(self, groups: List[Dict], total_questions: int) -> Optional[str]:
         """Write a 2-3 sentence executive summary of the top question groups."""

@@ -488,11 +488,11 @@ def test_noise_gate_capped(monkeypatch):
     assert analyzer._gated_threshold(20) == 0.95  # never above the cap
 
 
-def test_ai_splits_false_numeric_pairs(monkeypatch):
+def test_ai_audit_splits_false_numeric_pairs(monkeypatch):
     """
     Field regression (metering + Azure tokens at 0.81): embeddings score some
-    unrelated pairs as high as true pairs. Every numeric pair is confirmed by
-    the verifier; rejected pairs are split.
+    unrelated pairs as high as true pairs. The auditor checks every formed
+    group; evicted outliers become unique questions.
     """
     analyzer = make_analyzer(monkeypatch, threshold='0.75')
     fake = np.array([[1.0, 0.0], [0.81, np.sqrt(1 - 0.81 ** 2)]])
@@ -502,13 +502,13 @@ def test_ai_splits_false_numeric_pairs(monkeypatch):
     questions = [question('Does the metering agent come pre-installed?'),
                  question('Are container-level Azure tokens supported?')]
     groups = analyzer.group_similar_questions(questions,
-                                              verifier=lambda a, b: False)
+                                              auditor=lambda texts: [0])
     assert len(groups) == 2  # the false 0.81 pair was split by the AI
     assert all(g['count'] == 1 for g in groups)
 
 
-def test_uncertain_verifier_keeps_numeric_pairs(monkeypatch):
-    """On verifier failure (None), the numeric merge stands."""
+def test_uncertain_auditor_keeps_groups(monkeypatch):
+    """On auditor failure (None) or a clean audit ([]), the group stands."""
     analyzer = make_analyzer(monkeypatch, threshold='0.75')
     fake = np.array([[1.0, 0.0], [0.81, np.sqrt(1 - 0.81 ** 2)]])
     monkeypatch.setattr(analyzer, 'get_embeddings_batch',
@@ -516,25 +516,47 @@ def test_uncertain_verifier_keeps_numeric_pairs(monkeypatch):
 
     questions = [question('How do I reset my password?'),
                  question('Steps for changing my password?')]
-    groups = analyzer.group_similar_questions(questions, verifier=lambda a, b: None)
-    assert len(groups) == 1
-    assert groups[0]['count'] == 2
+    for verdict in (None, []):
+        groups = analyzer.group_similar_questions(
+            questions, auditor=lambda texts, v=verdict: v)
+        assert len(groups) == 1
+        assert groups[0]['count'] == 2
 
 
-def test_pair_confirmation_respects_call_cap(monkeypatch):
+def test_audit_evicts_outlier_from_larger_group(monkeypatch):
+    """
+    Field regression: a 3-question group (metering glued onto a monitoring
+    pair) was never checked because only pairs were confirmed. The audit
+    covers any group size and keeps the coherent remainder together.
+    """
+    analyzer = make_analyzer(monkeypatch, threshold='0.75')
+
+    def auditor(texts):
+        return [i for i, t in enumerate(texts) if 'metering' in t]
+
+    clusters = analyzer._audit_clusters(
+        [[0, 1, 2], [3]],
+        [[question('Configure the on-prem metering server?')],
+         [question('Monitor one application for errors?')],
+         [question('Change the monitoring mindset for integration products?')],
+         [question('Unrelated?')]], auditor)
+    assert sorted(map(sorted, clusters)) == [[0], [1, 2], [3]]
+
+
+def test_audit_respects_call_cap(monkeypatch):
     analyzer = make_analyzer(monkeypatch, threshold='0.75')
     monkeypatch.setenv('LLM_VERIFY_MAX', '1')
     calls = []
 
-    def verifier(a, b):
-        calls.append((a, b))
-        return False
+    def auditor(texts):
+        calls.append(texts)
+        return [0]
 
-    clusters = analyzer._confirm_pair_clusters(
-        [[0, 1], [2, 3], [4]],
-        [[question(f'q{i}?')] for i in range(5)], verifier)
-    assert len(calls) == 1            # cap enforced
-    assert clusters == [[0], [1], [2, 3], [4]]  # only the checked pair split
+    clusters = analyzer._audit_clusters(
+        [[0, 1, 2], [3, 4]],
+        [[question(f'q{i}?')] for i in range(5)], auditor)
+    assert len(calls) == 1  # cap enforced; biggest group audited first
+    assert sorted(map(sorted, clusters)) == [[0], [1, 2], [3, 4]]
 
 
 def test_ranking_breaks_count_ties_by_cohesion(monkeypatch):

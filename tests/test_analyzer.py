@@ -133,3 +133,22 @@ def test_markdown_export(analyzer, tmp_path):
     assert '# Question Analysis Report' in report
     assert 'asked 2 times' in report
     assert 'Unique Questions (1)' in report
+
+
+def test_keywords_contrast_against_corpus(analyzer):
+    """Words common to the whole corpus ('customer') characterize nothing;
+    group-specific words ('antivirus') must win. Fillers are stopworded."""
+    def q(text):
+        return {'text': text, 'normalized_text': text.lower()}
+
+    group = [q('Customer just needs antivirus scanning enabled?'),
+             q('Customer asks how antivirus quarantine works?')]
+    rest = [q('Customer just needs the transfer scheduled?'),
+            q('Customer just needs webhook retries configured?')]
+    corpus = group + rest
+
+    keywords = analyzer._extract_keywords(
+        group, analyzer._corpus_doc_freq(corpus), len(corpus))
+    assert keywords[0] == 'antivirus'
+    assert 'just' not in keywords and 'needs' not in keywords
+    assert keywords[1] != 'customer'  # corpus-wide word can't outrank specifics

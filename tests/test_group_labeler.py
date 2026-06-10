@@ -393,3 +393,65 @@ def test_answer_detection_counts_resolved_threads(monkeypatch):
 
     results = analyzer.analyze_slack_content(content)
     assert results['answered_questions'] == 1
+
+
+# ---- Group audit (outlier eviction) ----
+
+def test_audit_group_returns_zero_based_outliers(monkeypatch):
+    labeler = GroupLabeler(provider='ollama')
+    patch_chat(monkeypatch, [json.dumps({'outliers': [1]})])
+    assert labeler.audit_group(['How do I install the metering agent?',
+                                'How do I set up monitoring alerts?']) == [0]
+
+
+def test_audit_group_clean_and_uncertain(monkeypatch):
+    labeler = GroupLabeler(provider='ollama')
+    patch_chat(monkeypatch, [json.dumps({'outliers': []})])
+    assert labeler.audit_group(['a?', 'b?']) == []
+
+    def boom(*a, **k):
+        raise RuntimeError('ollama down')
+    monkeypatch.setattr('slack_question_analyzer.group_labeler.requests.post', boom)
+    # different questions: the cached verdict for ('a?', 'b?') must not apply
+    assert labeler.audit_group(['c?', 'd?']) is None
+
+
+def test_audit_group_rejects_evict_everything_verdict(monkeypatch):
+    """'All questions are outliers' is not a meaningful audit."""
+    labeler = GroupLabeler(provider='ollama')
+    patch_chat(monkeypatch, [json.dumps({'outliers': [1, 2]})])
+    assert labeler.audit_group(['a?', 'b?']) is None
+
+
+def test_audit_group_ignores_out_of_range_indices(monkeypatch):
+    labeler = GroupLabeler(provider='ollama')
+    patch_chat(monkeypatch, [json.dumps({'outliers': [2, 9, 0]})])
+    assert labeler.audit_group(['a?', 'b?', 'c?']) == [1]
+
+
+# ---- Timeout & warm-up ----
+
+def test_llm_timeout_configurable(monkeypatch):
+    monkeypatch.setenv('LLM_TIMEOUT', '300')
+    assert GroupLabeler(provider='ollama').timeout == 300
+    monkeypatch.delenv('LLM_TIMEOUT')
+    assert GroupLabeler(provider='ollama').timeout == 180
+
+
+def test_warm_up_loads_model_without_generating(monkeypatch):
+    labeler = GroupLabeler(provider='ollama')
+    captured = []
+    patch_chat(monkeypatch, ['ignored'], captured)
+    labeler.warm_up()
+    assert captured[0]['body']['messages'] == []
+    assert captured[0]['body']['model'] == labeler.model
+
+
+def test_warm_up_swallows_connection_errors(monkeypatch):
+    import requests as _requests
+    labeler = GroupLabeler(provider='ollama')
+
+    def boom(*a, **k):
+        raise _requests.ConnectionError('no ollama')
+    monkeypatch.setattr('slack_question_analyzer.group_labeler.requests.post', boom)
+    labeler.warm_up()  # must not raise
