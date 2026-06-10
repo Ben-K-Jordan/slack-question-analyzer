@@ -3,5 +3,13 @@ dist/
 .env
 *.log
 .DS_Store
+__pycache__/
+*.pyc
+.embedding_cache/
+.llm_cache/
+.pytest_cache/
+analyses/
+jobs/
 
 # Made with Bob
+*.egg-info/

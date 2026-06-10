@@ -4,38 +4,66 @@ AI-powered tool that analyzes Slack questions, groups similar ones together, and
 
 ## Features
 
-- **Question Extraction**: Automatically extracts questions from Slack message dumps
+- **Question Extraction**: Automatically extracts questions from Slack message dumps —
+  plain text, Slack JSON exports, or CSV (format auto-detected), with Slack markup
+  (mentions, links, emoji, code blocks) stripped automatically
+- **Tiered Grouping**: Exact and near-duplicate questions are merged with cheap string
+  comparison first — the AI provider is only called for genuinely distinct questions
 - **AI-Powered Grouping**: Uses embeddings to group semantically similar questions
+- **LLM Topic Labels** (optional): A local Ollama chat model (or OpenAI/Azure) names
+  each group and writes a one-sentence summary of what people are asking
 - **Multiple AI Providers**: 
   - **Ollama** (Local, Free) - Recommended for privacy and cost
   - **Azure OpenAI** (Copilot integration)
   - **Standard OpenAI**
 - **Ranked Results**: Groups questions by frequency with similarity scores
 - **Keyword Extraction**: Identifies key topics in each question group
+- **Date Tracking**: Shows when each question group was first and last asked
+- **Persistent Embedding Cache**: Embeddings are cached on disk (`.embedding_cache/`), so re-running an analysis is near-instant and never pays for the same API call twice
+- **Automatic Retries**: Transient provider/network failures are retried with exponential backoff
+- **Multiple Output Formats**: Export results as JSON, CSV, or a Markdown report
 - **CLI Interface**: Easy-to-use command-line tool
 
 ## Installation
 
 ### Prerequisites
 
-- Python 3.8 or higher
+- Python 3.10 or higher
 - (Optional) Ollama installed locally for free embeddings
+- (Alternative) Docker — see [Running with Docker](#running-with-docker)
 
 ### Setup
 
 1. Clone or download this repository
 
-2. Install dependencies:
+2. Install the package (editable, with dev tools):
 ```bash
-pip install -r requirements.txt
+pip install -e ".[dev]"        # or: pip install -r requirements.txt (same thing)
 ```
+
+This installs the `slack-analyzer` command.
 
 3. Configure your AI provider:
 ```bash
-python -m src.cli setup
+slack-analyzer setup
 ```
 
 This will guide you through setting up your preferred AI provider.
+
+### Running with Docker
+
+The compose file runs the whole stack — the analyzer (API + dashboard) and Ollama:
+
+```bash
+docker compose up -d --build
+docker compose exec ollama ollama pull nomic-embed-text
+docker compose exec ollama ollama pull llama3.2   # optional: enables the LLM features
+```
+
+Then open http://localhost:5000. Analyses, the embedding cache, and Ollama models
+persist in named volumes. To run just the analyzer container against an Ollama on
+your host, `docker build -t slack-question-analyzer . && docker run -p 5000:5000
+slack-question-analyzer` (it defaults to `host.docker.internal:11434`).
 
 ### Ollama Setup (Recommended)
 
@@ -52,24 +80,27 @@ ollama pull nomic-embed-text
 
 ### Basic Analysis
 
-Analyze a file containing Slack questions:
+Analyze one or more files containing Slack questions — plain files, several at
+once, or a zipped Slack export (everything merges into a single corpus):
 
 ```bash
-python -m src.cli analyze example_input.txt
+slack-analyzer analyze example_input.txt
+slack-analyzer analyze slack-export.zip -o report.md
+slack-analyzer analyze week1.json week2.json -o combined.md
 ```
 
 ### Save Results to JSON
 
 ```bash
-python -m src.cli analyze example_input.txt -o results.json
+slack-analyzer analyze example_input.txt -o results.json
 ```
 
 ### Use Specific AI Provider
 
 ```bash
-python -m src.cli analyze example_input.txt --provider ollama
-python -m src.cli analyze example_input.txt --provider azure
-python -m src.cli analyze example_input.txt --provider openai
+slack-analyzer analyze example_input.txt --provider ollama
+slack-analyzer analyze example_input.txt --provider azure
+slack-analyzer analyze example_input.txt --provider openai
 ```
 
 ### Adjust Similarity Threshold
@@ -77,20 +108,45 @@ python -m src.cli analyze example_input.txt --provider openai
 Higher threshold = stricter grouping (0.0 to 1.0):
 
 ```bash
-python -m src.cli analyze example_input.txt --threshold 0.9
+slack-analyzer analyze example_input.txt --threshold 0.9
 ```
+
+### Choose an Output Format
+
+The output format is inferred from the file extension:
+
+```bash
+slack-analyzer analyze example_input.txt -o results.json   # machine-readable
+slack-analyzer analyze example_input.txt -o results.csv    # one row per question
+slack-analyzer analyze example_input.txt -o report.md      # readable report
+```
+
+### Caching
+
+Embeddings are cached in `.embedding_cache/` and LLM outputs (topic labels,
+summaries, verdicts — deterministic at temperature 0) in `.llm_cache/`, one file per
+provider/model. Re-analyzing the same transcript costs zero provider calls. To bypass:
+
+```bash
+slack-analyzer analyze example_input.txt --no-cache   # embeddings only
+```
+
+Env switches: `EMBEDDING_CACHE=off`, `LLM_CACHE=off`, `EMBEDDING_CACHE_DIR`,
+`LLM_CACHE_DIR`.
 
 ### Validate Input File
 
 Check if your input file is formatted correctly:
 
 ```bash
-python -m src.cli validate example_input.txt
+slack-analyzer validate example_input.txt
 ```
 
-## Input Format
+## Input Formats
 
-The tool expects Slack content in the following format:
+The input format is detected automatically:
+
+**Plain text** with dashed separators (see `example_input.txt`):
 
 ```
 Date
@@ -105,7 +161,59 @@ Another question or message...
 -----------------------------------------------------------
 ```
 
-See `example_input.txt` for a complete example.
+**Slack JSON export** — a list of message objects (or `{"messages": [...]}`); Slack
+epoch timestamps (`ts`) are converted to dates automatically:
+
+```json
+[
+  {"type": "message", "user": "U123", "text": "How do I reset my password?", "ts": "1704412800.000100"}
+]
+```
+
+**CSV** with a `text`/`message`/`question` column and an optional `date`/`ts`/`timestamp` column:
+
+```csv
+date,message
+2024-01-05,How do I reset my password?
+```
+
+## LLM Features
+
+When a generation model is available, the pipeline uses it for five optional passes.
+With Ollama:
+
+```bash
+ollama pull llama3.2
+```
+
+| Feature | What it does | Switch (in `.env`) |
+|---|---|---|
+| Topic labels | Names each group (2-4 words) and writes a one-sentence summary | `GROUP_LABELS` |
+| Group verification | Double-checks group pairs whose similarity falls just below the threshold and merges them when they're the same topic | `LLM_VERIFY_GROUPS` |
+| Question detection | Finds implicit help requests the regex extractor missed ("stuck all day, the webhook keeps timing out") and rewrites them as questions | `LLM_EXTRACTION` |
+| Answer detection | Reads thread replies (Slack JSON exports) and decides whether each question was actually answered — feeds the "Answered" metric | `LLM_ANSWER_DETECTION` |
+| Executive summary | 2-3 sentence overview of the dominant themes, shown on the dashboard and in Markdown reports | `EXECUTIVE_SUMMARY` |
+
+Each switch accepts `auto` (default: run when the model is available), `on`, or `off`.
+`GROUP_LABELS=off` (or `--no-labels` on the CLI) disables all LLM features at once.
+
+```env
+# Ollama chat model used for all LLM features (default: llama3.2)
+OLLAMA_GENERATION_MODEL=llama3.2
+# For openai provider: CHAT_MODEL (default gpt-4o-mini)
+# For azure provider: AZURE_OPENAI_CHAT_DEPLOYMENT (LLM features off unless set)
+
+# Borderline verification window and call cap
+LLM_VERIFY_MARGIN=0.03
+LLM_VERIFY_MAX=10
+```
+
+Prompting details: all calls use chat endpoints with JSON-schema-enforced output,
+temperature 0, a fixed seed, and `keep_alive` so Ollama keeps the model loaded across
+calls. Labeling prompts include few-shot examples, the group's keywords, and a diverse
+sample of phrasings; outputs are validated (generic topics like "General Questions" are
+rejected) with one corrective retry. Everything degrades gracefully — without a
+generation model, groups fall back to keyword-based topics and the analysis still works.
 
 ## Output Format
 
@@ -177,29 +285,113 @@ SIMILARITY_THRESHOLD=0.85
 ollama serve
 
 # Run analysis
-python -m src.cli analyze example_input.txt -o results.json
+slack-analyzer analyze example_input.txt -o results.json
 ```
 
 ### Example 2: Analyze with Azure OpenAI
 
 ```bash
 # Set up Azure credentials
-python -m src.cli setup
+slack-analyzer setup
 
 # Run analysis
-python -m src.cli analyze example_input.txt --provider azure
+slack-analyzer analyze example_input.txt --provider azure
 ```
 
 ### Example 3: Strict Grouping
 
 ```bash
 # Only group very similar questions (threshold 0.95)
-python -m src.cli analyze example_input.txt --threshold 0.95
+slack-analyzer analyze example_input.txt --threshold 0.95
+```
+
+## Web Dashboard
+
+A React dashboard (in `Question Analyzer Design System/ui_kits/analyzer/`) provides a visual
+front end on top of the same analysis engine. The Flask server serves both the API **and**
+the dashboard, so the whole app runs with one command.
+
+### Running the Full Stack
+
+1. **Start Ollama** (if not already running):
+   ```bash
+   ollama serve
+   ```
+2. **Start the server** (`run_api_server.bat` on Windows, or):
+   ```bash
+   python api_server.py
+   ```
+3. **Open the dashboard**: http://localhost:5000
+
+Upload a transcript via the upload modal. The progress bar reflects real backend progress
+(per-embedding), and completed analyses are saved to `analyses/` — the dashboard
+automatically reloads your most recent analysis after a page refresh.
+
+Dashboard features:
+- **Export buttons**: download the displayed analysis as a Markdown report or CSV
+- **History** (clock icon): browse, reload, or delete any past analysis
+- **Settings** (gear icon): choose the AI provider and similarity threshold used for
+  new analyses (persisted in the browser)
+- **Week in Review**: real weekly trends computed from your latest analysis — volume
+  vs last week, 6-week trend, and per-topic rank movement (weeks are anchored to the
+  most recent question date in the transcript, so historical exports work too)
+- Until your first analysis, both views show demo data clearly labeled "sample data"
+
+Analyses are queued one at a time by default so a local Ollama isn't overloaded
+(`MAX_CONCURRENT_JOBS` to change), can be **cancelled** mid-run from the upload modal,
+and **survive server restarts**: jobs are persisted under `jobs/` and anything that was
+queued or running when the server stopped is automatically re-queued on startup.
+Other server settings: `API_HOST` (default `127.0.0.1`), `API_PORT` (default `5000`),
+`FLASK_DEBUG`, `MAX_CONTENT_MB` (default `50`), `ANALYSES_DIR` (default `analyses/`),
+`JOBS_DIR` (default `jobs/`).
+
+Uploads accept `.json`, `.txt`, `.csv` — or a **zipped Slack export**: every
+`.json`/`.txt`/`.csv` file inside the zip (e.g. one JSON file per day) is merged and
+analyzed as a single corpus.
+
+Very large transcripts are handled too: above `LARGE_CLUSTERING_THRESHOLD` (default
+2000) distinct questions, grouping switches to memory-safe leader clustering instead
+of a full n×n similarity matrix, and the dashboard paginates long topic lists.
+
+> **Security note:** the server has no authentication and CORS is open — it is meant
+> to run on your own machine. Don't set `API_HOST=0.0.0.0` on a shared network.
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/health` | GET | Health check — verifies Ollama/keys for the configured provider (or `?provider=...`) |
+| `/api/analyze` | POST | Start an analysis job. JSON body `{"content": "...", "provider": "ollama", "threshold": 0.85}` or multipart `files=` upload (`.json`/`.txt`/`.csv`/`.zip`). Returns `202` with `{"job_id": "..."}` |
+| `/api/jobs/<job_id>` | GET | Job status (`queued`/`running`/`done`/`error`/`cancelled`) and progress; includes the full result when done |
+| `/api/jobs/<job_id>/cancel` | POST | Cancel a queued or running job |
+| `/api/analyses` | GET | List of saved past analyses (newest first) |
+| `/api/analyses/latest` | GET | Full results of the most recent analysis |
+| `/api/analyses/<id>` | GET | Full results of a specific analysis |
+| `/api/analyses/<id>` | DELETE | Delete a saved analysis |
+| `/api/analyses/<id>/export` | GET | Download as `?format=md`, `csv`, or `json` |
+| `/api/analyses/latest/weekly` | GET | Week-in-Review stats for the most recent analysis |
+| `/api/analyses/<id>/weekly` | GET | Week-in-Review stats for a specific analysis |
+| `/api/config` | GET | Current provider/threshold configuration |
+
+A finished job's `data` field contains the same JSON structure shown in
+[Output Format](#output-format).
+
+Example:
+```bash
+# Start a job
+curl -X POST http://localhost:5000/api/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"content": "2026-06-05\nHow do I configure virus scanning?"}'
+# -> {"success": true, "job_id": "abc123..."}
+
+# Poll for progress / result
+curl http://localhost:5000/api/jobs/abc123...
+# -> {"status": "running", "progress": {"stage": "embedding", "completed": 12, "total": 49}}
 ```
 
 ## Troubleshooting
 
-### Ollama Connection Error
+### Ollama Connection Error ("connection refused")
 
 Make sure Ollama is running:
 ```bash
@@ -208,9 +400,32 @@ ollama serve
 
 ### Model Not Found
 
-Pull the required model:
+Pull the required model (about 274MB, one time only):
 ```bash
 ollama pull nomic-embed-text
+```
+
+### Port 11434 Already in Use
+
+Run Ollama on another port and update `.env` to match:
+```bash
+OLLAMA_HOST=0.0.0.0:11435 ollama serve
+```
+```env
+OLLAMA_URL=http://localhost:11435
+```
+
+### Alternative Ollama Models
+
+Set `OLLAMA_MODEL` in `.env` (and `ollama pull` it first):
+- `nomic-embed-text` — recommended (274MB)
+- `all-minilm` — smaller and faster (45MB), less accurate
+- `mxbai-embed-large` — larger (670MB), more accurate
+
+### Import Errors
+
+```bash
+pip install -r requirements.txt
 ```
 
 ### API Key Errors
@@ -223,27 +438,36 @@ Verify your `.env` file has the correct API keys and endpoints.
 
 ```
 slack-question-analyzer/
-├── src/
+├── slack_question_analyzer/
 │   ├── __init__.py
 │   ├── __main__.py
-│   ├── cli.py              # Command-line interface
+│   ├── cli.py              # Command-line interface (the slack-analyzer command)
 │   ├── analyzer.py         # Main analysis orchestration
-│   ├── question_extractor.py  # Question parsing logic
-│   └── similarity_analyzer.py # AI embedding & grouping
+│   ├── question_extractor.py  # Multi-format parsing & question detection
+│   ├── similarity_analyzer.py # Embeddings, dedupe tiers & grouping
+│   ├── group_labeler.py    # LLM prompting layer
+│   ├── weekly_stats.py     # Week-in-Review computation
+│   └── exporters.py        # CSV / Markdown export
+├── tests/                  # pytest suite
+├── api_server.py           # Flask API + dashboard server
+├── run_api_server.bat      # Windows launcher for the API server
+├── Question Analyzer Design System/  # React dashboard + design system
+├── pyproject.toml          # Package metadata & dependencies
+├── Dockerfile / docker-compose.yml   # Container setup
 ├── example_input.txt       # Sample input file
-├── requirements.txt        # Python dependencies
-├── .env.example           # Configuration template
+├── .env.example            # Configuration template
 └── README.md
 ```
 
 ### Running Tests
 
 ```bash
-# Validate input format
-python -m src.cli validate example_input.txt
+# Run the test suite (no Ollama required — embeddings are mocked)
+python -m pytest tests/
 
-# Run analysis on example
-python -m src.cli analyze example_input.txt
+# Manual smoke test
+slack-analyzer validate example_input.txt
+slack-analyzer analyze example_input.txt
 ```
 
 ## License
