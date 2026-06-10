@@ -388,12 +388,26 @@ def list_topics():
     """The learned topic bank: known topics accumulated across analyses."""
     from slack_question_analyzer.topic_bank import TopicBank
     bank = TopicBank()
-    fields = ('topic', 'summary', 'representative_question', 'keywords',
+    fields = ('id', 'topic', 'summary', 'representative_question', 'keywords',
               'question_count', 'analysis_count', 'first_seen', 'last_seen')
     topics = [{key: entry.get(key) for key in fields}
               for entry in sorted(bank.entries,
                                   key=lambda e: e.get('question_count', 0), reverse=True)]
     return jsonify({'success': True, 'topics': topics})
+
+
+@app.route('/api/topics/<topic_id>', methods=['PATCH'])
+def rename_topic(topic_id):
+    """Rename a learned topic — the fix for a bad name sticking forever."""
+    from slack_question_analyzer.topic_bank import TopicBank
+    data = request.get_json(silent=True) or {}
+    new_name = str(data.get('topic', '')).strip()
+    if not new_name:
+        return jsonify({'success': False, 'error': 'topic name cannot be empty'}), 400
+    bank = TopicBank()
+    if not bank.rename(topic_id, new_name):
+        return jsonify({'success': False, 'error': 'Topic not found'}), 404
+    return jsonify({'success': True, 'topic': new_name})
 
 
 # ---------------------------------------------------------------------------

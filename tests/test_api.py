@@ -265,6 +265,22 @@ def test_topics_endpoint(client):
     assert 'centroid' not in body['topics'][0]  # internal detail stays internal
 
 
+def test_rename_topic_endpoint(client):
+    from slack_question_analyzer.topic_bank import TopicBank
+    bank = TopicBank()
+    entry = bank.record({'topic': 'Bad Name', 'summary': None,
+                         'representative_question': 'How do I reset?',
+                         'keywords': [], 'count': 2}, [1.0, 0.0])
+    bank.save()
+
+    response = client.patch(f"/api/topics/{entry['id']}", json={'topic': 'Password Reset'})
+    assert response.status_code == 200
+    assert TopicBank().entries[0]['topic'] == 'Password Reset'
+
+    assert client.patch('/api/topics/nonexistent', json={'topic': 'X'}).status_code == 404
+    assert client.patch(f"/api/topics/{entry['id']}", json={'topic': '  '}).status_code == 400
+
+
 def test_model_pull_endpoint(client, monkeypatch):
     monkeypatch.setattr(api_server, '_model_pulls', {})
 

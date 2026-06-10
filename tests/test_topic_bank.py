@@ -1,5 +1,7 @@
 """Tests for the learned topic bank."""
 
+import json
+
 import numpy as np
 
 from slack_question_analyzer.topic_bank import TopicBank
@@ -113,6 +115,73 @@ def test_bank_keeps_topic_names_stable_across_analyses(monkeypatch):
     group = results2['groups'][0]
     assert group['topic'] == 'Password Reset'
     assert group['seen_in_analyses'] == 2
+
+
+def test_seeding_pre_loads_curated_topics(monkeypatch, tmp_path):
+    """An empty bank is pre-loaded from seed_topics.json on first analysis."""
+    seed_file = tmp_path / 'seeds.json'
+    seed_file.write_text(json.dumps([
+        {'topic': 'Password Reset', 'question': 'How do I reset my password?'},
+    ]), encoding='utf-8')
+    monkeypatch.setenv('SEED_TOPICS_PATH', str(seed_file))
+
+    analyzer = make_analyzer(monkeypatch)
+
+    def never(texts, keywords=None):
+        raise AssertionError('the seeded bank should label this group')
+
+    monkeypatch.setattr(analyzer.labeler, 'label_group', never)
+    results = analyzer.analyze_slack_content(SAMPLE_CONTENT)
+
+    group = results['groups'][0]
+    assert group['topic'] == 'Password Reset'  # named by the seed, not the LLM
+    assert group['seen_in_analyses'] == 1      # first real sighting
+    assert group['topic_id']
+
+    # Bank now has the seed entry only (matched, not duplicated)
+    bank = TopicBank()
+    assert len(bank.entries) == 1
+    assert bank.entries[0]['question_count'] == 2
+
+
+def test_seeding_runs_once(monkeypatch, tmp_path):
+    seed_file = tmp_path / 'seeds.json'
+    seed_file.write_text(json.dumps([
+        {'topic': 'Password Reset', 'question': 'How do I reset my password?'},
+    ]), encoding='utf-8')
+    monkeypatch.setenv('SEED_TOPICS_PATH', str(seed_file))
+
+    for _ in range(2):
+        analyzer = make_analyzer(monkeypatch)
+        monkeypatch.setattr(analyzer.labeler, 'label_group',
+                            lambda texts, keywords=None: None)
+        analyzer.analyze_slack_content(SAMPLE_CONTENT)
+
+    assert len(TopicBank().entries) == 1  # no duplicate seeds
+
+
+def test_repo_seed_file_is_valid():
+    """The shipped seed file: valid JSON, unique questions, named topics."""
+    import json as json_module
+    from pathlib import Path
+    seeds = json_module.loads(Path('seed_topics.json').read_text(encoding='utf-8'))
+    assert len(seeds) == 150
+    questions = [s['question'] for s in seeds]
+    assert len(set(questions)) == len(questions)
+    for seed in seeds:
+        assert seed['topic'].strip()
+        assert seed['question'].strip().endswith('?')
+
+
+def test_rename_updates_bank(tmp_path):
+    bank = TopicBank(path=str(tmp_path / 'bank.json'))
+    entry = bank.record(make_group(topic='Bad Name'), [1.0, 0.0])
+
+    assert bank.rename(entry['id'], 'Virus Scanning') is True
+    assert bank.rename('nonexistent', 'X') is False
+
+    reloaded = TopicBank(path=str(tmp_path / 'bank.json'))
+    assert reloaded.entries[0]['topic'] == 'Virus Scanning'
 
 
 def test_bank_off_disables_learning(monkeypatch):

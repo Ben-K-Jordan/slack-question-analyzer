@@ -5,6 +5,7 @@ Main analyzer module that orchestrates question extraction, grouping, and rankin
 import os
 import json
 import logging
+from pathlib import Path
 from typing import List, Dict, Optional, Literal
 from datetime import datetime, timezone
 import numpy as np
@@ -145,6 +146,10 @@ class QuestionAnalyzer:
 
         verifier = (self.labeler.verify_same_topic
                     if self._llm_enabled(self._verify_mode) else None)
+
+        # First run ever: pre-load the bank with curated starter topics so
+        # groups get good names from day one
+        self._seed_topic_bank_if_empty()
 
         logger.info("Step 2: Grouping similar questions using AI...")
         groups = self.similarity_analyzer.group_similar_questions(
@@ -383,7 +388,45 @@ class QuestionAnalyzer:
                 entry = bank.record(group, centroid, matched)
                 if entry:
                     group['seen_in_analyses'] = entry['analysis_count']
+                    group['topic_id'] = entry['id']  # enables renaming in the UI
             bank.save()
+
+    def _seed_topic_bank_if_empty(self):
+        """
+        Pre-load an empty topic bank from seed_topics.json (curated
+        {topic, question} pairs). Embeddings are computed locally on first
+        use and cached; failures are non-fatal (the bank just starts empty).
+        """
+        bank = TopicBank()
+        if not bank.enabled or bank.entries:
+            return
+        seed_path = Path(os.getenv('SEED_TOPICS_PATH', 'seed_topics.json'))
+        if not seed_path.is_file():
+            return
+
+        try:
+            with open(seed_path, 'r', encoding='utf-8') as f:
+                seeds = json.load(f)
+            texts = [self.extractor.normalize_question(s['question']) for s in seeds]
+            logger.info("Seeding topic bank with %d starter topics "
+                        "(embedding them now; one time only)...", len(seeds))
+            embeddings = self.similarity_analyzer.get_embeddings_batch(texts)
+            for seed, vector in zip(seeds, embeddings, strict=True):
+                v = np.asarray(vector, dtype=float)
+                norm = np.linalg.norm(v)
+                if not norm:
+                    continue
+                entry = bank.record({'topic': seed['topic'],
+                                     'summary': seed.get('summary'),
+                                     'representative_question': seed['question'],
+                                     'keywords': seed.get('keywords', []),
+                                     'count': 0},
+                                    (v / norm).tolist())
+                if entry:
+                    entry['analysis_count'] = 0  # seeds aren't sightings yet
+            bank.save()
+        except Exception as e:
+            logger.warning("Topic bank seeding skipped: %s", e)
 
     def _group_centroid(self, group: Dict) -> Optional[List[float]]:
         """Mean unit vector of the group's distinct questions (from cache)."""
