@@ -348,7 +348,7 @@ class SimilarityAnalyzer:
 
     def group_similar_questions(self, questions: List[Dict],
                                 progress_callback=None, verifier=None,
-                                auditor=None) -> List[Dict]:
+                                auditor=None, known_topics=None) -> List[Dict]:
         """
         Group similar questions together.
 
@@ -417,14 +417,25 @@ class SimilarityAnalyzer:
             # The bar rises above the bulk of pairwise similarities (p90).
             self.effective_threshold = self._gated_threshold(len(buckets))
 
-            clusters = self._cluster_buckets(len(buckets), similarity_matrix)
+            # Funnel stage 1: known categories claim questions directly
+            claimed_clusters, claimed = [], set()
+            if known_topics:
+                claimed_clusters = self._claim_known_topics(embeddings, known_topics)
+                claimed = {i for c in claimed_clusters for i in c}
+                if claimed_clusters:
+                    logger.info("Known topics claimed %d question(s) into %d "
+                                "group(s) before clustering",
+                                len(claimed), len(claimed_clusters))
+
+            clusters = self._cluster_buckets(len(buckets), similarity_matrix,
+                                             exclude=claimed)
 
             # Auto-adjust: when the user didn't pin a threshold and nothing
             # merged, re-cluster just below the most similar pair — but ONLY
             # if that pair clearly stands out from the bulk, and never below
             # the noise gate.
             stats = self.last_similarity_stats
-            if (not self.threshold_pinned
+            if (not self.threshold_pinned and not claimed_clusters
                     and all(len(c) == 1 for c in clusters)
                     and stats and stats['max'] < self.effective_threshold):
                 separation = stats['max'] - stats['p90']
@@ -438,13 +449,16 @@ class SimilarityAnalyzer:
                     self.similarity_threshold = adjusted
                     self.effective_threshold = adjusted
                     self.threshold_auto_adjusted = True
-                    clusters = self._cluster_buckets(len(buckets), similarity_matrix)
+                    clusters = self._cluster_buckets(len(buckets), similarity_matrix,
+                                                     exclude=claimed)
                 else:
                     logger.info("No groups at bar %.2f and NOT auto-adjusting: "
                                 "top pair (%.3f) sits inside the noise band "
                                 "(p90 %.3f) — these questions are about "
                                 "genuinely different topics",
                                 self.effective_threshold, stats['max'], stats['p90'])
+
+            clusters = claimed_clusters + clusters
 
             # Tier 4: LLM double-check for merges embeddings couldn't decide
             if verifier is not None and len(clusters) > 1:
@@ -569,7 +583,45 @@ class SimilarityAnalyzer:
             'median': round(float(np.median(pairs)), 3),
         }
 
-    def _cluster_buckets(self, n: int, similarity_matrix) -> List[List[int]]:
+    def _claim_known_topics(self, embeddings, known_topics: List[Dict]) -> List[List[int]]:
+        """
+        Funnel stage 1: known categories (the learned topic bank, seeded with
+        curated domain topics) claim questions by classification. Two domain
+        questions can score anywhere against EACH OTHER in a generic embedding
+        space, but both scoring high against the same curated category is a
+        much stronger signal — so those become a group directly.
+
+        Only categories claiming 2+ questions form groups; single claims are
+        released back to normal clustering so they can still pair up there.
+        """
+        threshold = float(os.getenv('BANK_MATCH_THRESHOLD', '0.85'))
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        unit = embeddings / norms
+
+        centroids = []
+        for topic in known_topics:
+            c = np.asarray(topic.get('centroid'), dtype=float)
+            norm = np.linalg.norm(c)
+            ok = norm > 0 and c.shape == unit[0].shape
+            centroids.append(c / norm if ok else None)
+
+        by_topic: Dict[int, List[int]] = {}
+        for i in range(len(unit)):
+            best, best_sim = None, threshold
+            for k, c in enumerate(centroids):
+                if c is None:
+                    continue
+                sim = float(unit[i] @ c)
+                if sim >= best_sim:
+                    best, best_sim = k, sim
+            if best is not None:
+                by_topic.setdefault(best, []).append(i)
+
+        return [indices for indices in by_topic.values() if len(indices) >= 2]
+
+    def _cluster_buckets(self, n: int, similarity_matrix,
+                         exclude=frozenset()) -> List[List[int]]:
         """
         Greedy average-link clustering of bucket indices.
 
@@ -580,7 +632,7 @@ class SimilarityAnalyzer:
         giant mixed group; average-link keeps clusters tight.
         """
         clusters = []
-        assigned = set()
+        assigned = set(exclude)
 
         for i in range(n):
             if i in assigned:

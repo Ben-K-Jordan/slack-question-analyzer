@@ -63,6 +63,24 @@ AUDIT_SCHEMA = {
     'required': ['outliers'],
 }
 
+THEMES_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'themes': {
+            'type': 'array',
+            'items': {
+                'type': 'object',
+                'properties': {
+                    'name': {'type': 'string'},
+                    'items': {'type': 'array', 'items': {'type': 'integer'}},
+                },
+                'required': ['name', 'items'],
+            },
+        },
+    },
+    'required': ['themes'],
+}
+
 SUMMARY_SCHEMA = {
     'type': 'object',
     'properties': {'summary': {'type': 'string'}},
@@ -165,6 +183,16 @@ AUDIT_SYSTEM = (
     "clients using monitoring/alerting? Same subject, different wording: "
     "{\"outliers\": []}\n\n"
     "Respond with JSON only."
+)
+
+THEMES_SYSTEM = (
+    "You organize support-question topics into broad themes for an executive "
+    "funnel view. Produce 3 to 6 themes with short names (1-3 words, e.g. "
+    "'Transfers & APIs', 'Security', 'Monitoring'). Assign EVERY numbered item "
+    "to exactly one theme by its number. Do not invent themes for single "
+    "stragglers if a broader existing theme fits.\n"
+    "Respond with JSON only: {\"themes\": [{\"name\": \"...\", "
+    "\"items\": [1, 4, 7]}]}"
 )
 
 SUMMARY_SYSTEM = (
@@ -548,6 +576,30 @@ class GroupLabeler:
             return None
         return outliers
 
+    def assign_themes(self, items: List[str]) -> Optional[List[Optional[str]]]:
+        """
+        Funnel roll-up: organize topics/questions into 3-6 broad themes.
+        Returns one theme name per input item (None for items the model
+        failed to place), or None when the call fails entirely.
+        """
+        numbered = '\n'.join(f"{i + 1}. {item[:160]}" for i, item in enumerate(items))
+        data = self._generate_json(
+            self._system(THEMES_SYSTEM),
+            f"Topics and questions:\n{numbered}\n\nOrganize them into themes.",
+            THEMES_SCHEMA, max_tokens=400)
+        if data is None or not isinstance(data.get('themes'), list):
+            return None
+
+        assigned: List[Optional[str]] = [None] * len(items)
+        for theme in data['themes']:
+            name = str(theme.get('name', '')).strip()
+            if not name:
+                continue
+            for i in theme.get('items', []):
+                if isinstance(i, int) and 1 <= i <= len(items):
+                    assigned[i - 1] = name
+        return assigned if any(assigned) else None
+
     def summarize_analysis(self, groups: List[Dict], total_questions: int) -> Optional[str]:
         """Write a 2-3 sentence executive summary of the top question groups."""
         lines = [f"Total questions analyzed: {total_questions}", 'Top question groups:']
@@ -571,22 +623,27 @@ class GroupLabeler:
         """
         return self._questions_from_llm(message_texts, self._system(DETECT_SYSTEM)) or []
 
-    def extract_questions(self, message_texts: List[str]) -> Optional[List[Dict]]:
+    def extract_questions(self, message_texts: List[str],
+                          thorough: bool = False) -> Optional[List[Dict]]:
         """
         LLM-first extraction (LLM_EXTRACTION=full): pull every question out of
         every message, cleaned and rewritten. Multiple questions per message
         are allowed. Returns [{'index': int, 'question': str}]; an empty list
         means "no questions here", None means the call failed.
-        """
-        return self._questions_from_llm(message_texts, self._system(EXTRACT_SYSTEM))
 
-    def _questions_from_llm(self, message_texts: List[str],
-                            system: str) -> Optional[List[Dict]]:
+        thorough=True re-runs with the quality model — used to double-check
+        messages the fast model skipped that look like questions.
+        """
+        return self._questions_from_llm(message_texts, self._system(EXTRACT_SYSTEM),
+                                        model=self.model if thorough else None)
+
+    def _questions_from_llm(self, message_texts: List[str], system: str,
+                            model: Optional[str] = None) -> Optional[List[Dict]]:
         numbered = '\n'.join(f"{i}. {text[:600]}" for i, text in enumerate(message_texts))
         user = (f"{EXTRACT_FEW_SHOT}\n{numbered}" if system.startswith(EXTRACT_SYSTEM[:40])
                 else f"Messages:\n{numbered}")
         data = self._generate_json(system, user, DETECT_SCHEMA,
-                                   max_tokens=800, model=self.fast_model)
+                                   max_tokens=800, model=model or self.fast_model)
         if data is None or not isinstance(data.get('questions'), list):
             return None
 
