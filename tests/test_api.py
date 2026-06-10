@@ -250,6 +250,21 @@ def test_done_job_status_served_from_disk_after_restart(client, fake_engine):
     assert body['data']['total_questions'] == 3
 
 
+def test_topics_endpoint(client):
+    from slack_question_analyzer.topic_bank import TopicBank
+    bank = TopicBank()
+    bank.record({'topic': 'Password Reset', 'summary': 's',
+                 'representative_question': 'How do I reset?',
+                 'keywords': ['password'], 'count': 4}, [1.0, 0.0])
+    bank.save()
+
+    body = client.get('/api/topics').get_json()
+    assert body['success']
+    assert body['topics'][0]['topic'] == 'Password Reset'
+    assert body['topics'][0]['question_count'] == 4
+    assert 'centroid' not in body['topics'][0]  # internal detail stays internal
+
+
 def test_model_pull_endpoint(client, monkeypatch):
     monkeypatch.setattr(api_server, '_model_pulls', {})
 

@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from .question_extractor import QuestionExtractor
 from .similarity_analyzer import SimilarityAnalyzer
 from .group_labeler import GroupLabeler
+from .topic_bank import TopicBank
 from .exporters import to_csv, to_markdown
 
 logger = logging.getLogger(__name__)
@@ -330,29 +331,82 @@ class QuestionAnalyzer:
         """
         Give each group a 'topic' (and, when an LLM is available, a 'summary').
 
-        Multi-question groups get LLM-generated labels when a generation model
-        is configured and reachable; everything else falls back to keywords.
+        The topic bank is consulted first: groups matching a known topic keep
+        its established name (stable labels across analyses, no LLM call).
+        Remaining multi-question groups get LLM-generated labels when a
+        generation model is reachable; everything else falls back to keywords.
         """
         candidates = [g for g in groups if g['count'] > 1][:MAX_LABELED_GROUPS]
-        use_llm = self.labeler is not None and (self._labels_forced or self.labeler.available())
 
-        if use_llm and candidates:
+        # Pass 1: the bank labels topics it has seen before
+        bank = TopicBank()
+        bank_matches = {}  # id(group) -> (centroid, matched entry or None)
+        if bank.enabled:
+            threshold = self.similarity_analyzer.similarity_threshold
+            for group in candidates:
+                centroid = self._group_centroid(group)
+                matched = bank.match(centroid, threshold)
+                bank_matches[id(group)] = (centroid, matched)
+                if matched and matched.get('topic'):
+                    group['topic'] = matched['topic']
+                    group['summary'] = matched.get('summary')
+            known = sum(1 for _, m in bank_matches.values() if m)
+            if known:
+                logger.info("Topic bank recognized %d of %d group(s)",
+                            known, len(candidates))
+
+        # Pass 2: LLM labels for topics the bank didn't know
+        unlabeled = [g for g in candidates if not g.get('topic')]
+        use_llm = self.labeler is not None and (self._labels_forced or self.labeler.available())
+        if use_llm and unlabeled:
             logger.info("Step 4: Generating topic labels with %s...", self.labeler.model)
-            report('labeling', 0, len(candidates))
-            for i, group in enumerate(candidates, 1):
+            report('labeling', 0, len(unlabeled))
+            for i, group in enumerate(unlabeled, 1):
                 sample = self._diverse_sample(group['questions'])
                 label = self.labeler.label_group([q['text'] for q in sample],
                                                  keywords=group.get('keywords'))
                 if label:
                     group['topic'] = label['topic']
                     group['summary'] = label['summary']
-                report('labeling', i, len(candidates))
+                report('labeling', i, len(unlabeled))
 
         # Keyword fallback for anything the LLM didn't (or couldn't) label
         for group in groups:
             if not group.get('topic'):
                 group['topic'] = self._keyword_topic(group)
                 group['summary'] = None
+
+        # Pass 3: teach the bank what this analysis saw
+        if bank.enabled:
+            for group in candidates:
+                centroid, matched = bank_matches.get(id(group), (None, None))
+                entry = bank.record(group, centroid, matched)
+                if entry:
+                    group['seen_in_analyses'] = entry['analysis_count']
+            bank.save()
+
+    def _group_centroid(self, group: Dict) -> Optional[List[float]]:
+        """Mean unit vector of the group's distinct questions (from cache)."""
+        cache = self.similarity_analyzer.embeddings_cache
+        prefix = self.similarity_analyzer.embed_prefix
+        vectors = []
+        seen = set()
+        for q in group['questions']:
+            text = q['normalized_text']
+            if text in seen:
+                continue
+            seen.add(text)
+            vector = cache.get(prefix + text)
+            if vector is not None:
+                v = np.asarray(vector, dtype=float)
+                norm = np.linalg.norm(v)
+                if norm:
+                    vectors.append(v / norm)
+        if not vectors:
+            return None
+        centroid = np.mean(vectors, axis=0)
+        norm = np.linalg.norm(centroid)
+        return (centroid / norm).tolist() if norm else None
 
     def _diverse_sample(self, questions: List[Dict], k: int = 8) -> List[Dict]:
         """
