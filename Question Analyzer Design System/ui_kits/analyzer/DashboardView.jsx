@@ -315,7 +315,7 @@ window.DashboardView = DashboardView;
 function thresholdHint(results) {
   const stats = results.metadata && results.metadata.similarity_stats;
   if (!stats || (results.total_groups || 0) > 0) return null;
-  const threshold = results.metadata.similarity_threshold;
+  const threshold = results.metadata.effective_threshold || results.metadata.similarity_threshold;
   if (stats.max >= threshold) return null;
   const suggestion = Math.round((stats.max - 0.02) * 100) / 100;
   if (suggestion <= 0 || suggestion >= threshold) return null;

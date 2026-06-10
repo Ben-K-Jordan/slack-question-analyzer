@@ -83,9 +83,13 @@ class SimilarityAnalyzer:
             # Field-calibrated on real MFT transcripts: in a single-domain
             # channel, nomic scores UNRELATED questions ~0.65-0.72, so the
             # threshold must sit above that noise band
-            self.similarity_threshold = 0.80 if provider == 'ollama' else 0.85
+            self.similarity_threshold = 0.85
             self.threshold_pinned = False
         self.threshold_auto_adjusted = False
+        # Effective bar actually used for grouping: the threshold, raised above
+        # the corpus's measured noise level when the corpus is dense
+        self.effective_threshold = self.similarity_threshold
+        self.noise_gate = None
 
         if provider == 'azure':
             # Azure OpenAI configuration
@@ -367,6 +371,8 @@ class SimilarityAnalyzer:
         logger.info("Analyzing %d questions...", len(questions))
         self.last_similarity_stats = None
         self.threshold_auto_adjusted = False
+        self.effective_threshold = self.similarity_threshold
+        self.noise_gate = None
 
         # Tiers 1-2: merge duplicates without AI
         buckets = self._dedupe_questions(questions)
@@ -404,34 +410,40 @@ class SimilarityAnalyzer:
             similarity_matrix = cosine_similarity(embeddings)
             self.last_similarity_stats = self._similarity_stats(similarity_matrix)
 
+            # The grouping bar is RELATIVE to the corpus's measured noise:
+            # in a single-domain channel, nomic scores unrelated questions
+            # anywhere up to ~0.8+, so any fixed threshold eventually fails.
+            # The bar rises above the bulk of pairwise similarities (p90).
+            self.effective_threshold = self._gated_threshold(len(buckets))
+
             clusters = self._cluster_buckets(len(buckets), similarity_matrix)
 
             # Auto-adjust: when the user didn't pin a threshold and nothing
             # merged, re-cluster just below the most similar pair — but ONLY
-            # if that pair clearly stands out from the bulk. In single-domain
-            # corpora the bulk of pairwise similarities forms a dense noise
-            # band (every question mentions the same product); relaxing into
-            # that band merges unrelated topics into meaningless blobs.
+            # if that pair clearly stands out from the bulk, and never below
+            # the noise gate.
             stats = self.last_similarity_stats
             if (not self.threshold_pinned
                     and all(len(c) == 1 for c in clusters)
-                    and stats and stats['max'] < self.similarity_threshold):
+                    and stats and stats['max'] < self.effective_threshold):
                 separation = stats['max'] - stats['p90']
                 adjusted = round(stats['max'] - 0.02, 2)
-                if separation >= 0.04 and adjusted >= 0.5:
-                    logger.info("No groups at threshold %.2f; auto-adjusting to "
+                floor = max(0.5, self.noise_gate or 0.0)
+                if separation >= 0.04 and adjusted >= floor:
+                    logger.info("No groups at bar %.2f; auto-adjusting to "
                                 "%.2f (top pair %.3f stands out from the bulk, "
-                                "p90 %.3f)", self.similarity_threshold, adjusted,
+                                "p90 %.3f)", self.effective_threshold, adjusted,
                                 stats['max'], stats['p90'])
                     self.similarity_threshold = adjusted
+                    self.effective_threshold = adjusted
                     self.threshold_auto_adjusted = True
                     clusters = self._cluster_buckets(len(buckets), similarity_matrix)
                 else:
-                    logger.info("No groups at threshold %.2f and NOT auto-adjusting: "
+                    logger.info("No groups at bar %.2f and NOT auto-adjusting: "
                                 "top pair (%.3f) sits inside the noise band "
                                 "(p90 %.3f) — these questions are about "
                                 "genuinely different topics",
-                                self.similarity_threshold, stats['max'], stats['p90'])
+                                self.effective_threshold, stats['max'], stats['p90'])
 
             # Tier 4: LLM double-check for merges embeddings couldn't decide
             if verifier is not None and len(clusters) > 1:
@@ -444,7 +456,37 @@ class SimilarityAnalyzer:
         # Sort groups by count (most common first)
         groups.sort(key=lambda x: x['count'], reverse=True)
 
+        sizes = [(g['count'], round(g['avg_similarity'], 3)) for g in groups[:8]]
+        logger.info("Grouping bar %.3f (threshold %.2f%s) -> groups (count, avg): %s",
+                    self.effective_threshold, self.similarity_threshold,
+                    f", noise gate {self.noise_gate:.3f}" if self.noise_gate else "",
+                    sizes)
+
         return groups
+
+    MIN_BUCKETS_FOR_GATE = 8  # p90 is too noisy on tiny corpora
+
+    def _gated_threshold(self, n_buckets: int) -> float:
+        """
+        The bar actually used for grouping: the configured threshold, raised
+        above the corpus's pairwise-similarity bulk (p90 + margin) when the
+        corpus is dense. Self-calibrating across embedding models and domains.
+        """
+        self.noise_gate = None
+        stats = self.last_similarity_stats
+        if not stats or n_buckets < self.MIN_BUCKETS_FOR_GATE:
+            return self.similarity_threshold
+
+        margin = float(os.getenv('NOISE_GATE_MARGIN', '0.05'))
+        gate = round(min(stats['p90'] + margin, 0.95), 3)
+        if gate > self.similarity_threshold:
+            self.noise_gate = gate
+            logger.info("Dense corpus (p90 pairwise similarity %.3f): raising "
+                        "the grouping bar from %.2f to %.3f so unrelated "
+                        "same-domain questions don't merge",
+                        stats['p90'], self.similarity_threshold, gate)
+            return gate
+        return self.similarity_threshold
 
     def _group_large(self, buckets: List[List[Dict]], embeddings) -> List[Dict]:
         """
@@ -464,7 +506,7 @@ class SimilarityAnalyzer:
             if clusters:
                 sims = centroids @ unit[i]
                 best = int(np.argmax(sims))
-                if sims[best] >= self.similarity_threshold:
+                if sims[best] >= self.effective_threshold:
                     clusters[best].append(i)
                     sums[best] += unit[i]
                     centroids[best] = sums[best] / np.linalg.norm(sums[best])
@@ -544,7 +586,7 @@ class SimilarityAnalyzer:
 
                 avg_similarity = float(np.mean(
                     [similarity_matrix[j][idx] for idx in group_indices]))
-                if avg_similarity >= self.similarity_threshold:
+                if avg_similarity >= self.effective_threshold:
                     group_indices.append(j)
                     assigned.add(j)
 
@@ -567,7 +609,7 @@ class SimilarityAnalyzer:
             for b in range(a + 1, len(clusters)):
                 best = max(similarity_matrix[i][j]
                            for i in clusters[a] for j in clusters[b])
-                if best >= self.similarity_threshold - margin:
+                if best >= self.effective_threshold - margin:
                     candidates.append((best, a, b))
         candidates.sort(reverse=True)
         candidates = candidates[:max_checks]
@@ -596,7 +638,7 @@ class SimilarityAnalyzer:
             combined = clusters[ra] + clusters[rb]
             pair_sims = [similarity_matrix[x][y]
                          for ix, x in enumerate(combined) for y in combined[ix + 1:]]
-            if float(np.mean(pair_sims)) < self.similarity_threshold - margin:
+            if float(np.mean(pair_sims)) < self.effective_threshold - margin:
                 continue
 
             texts_a = [buckets[idx][0]['text'] for idx in clusters[ra][:3]]
