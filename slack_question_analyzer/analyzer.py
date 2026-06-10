@@ -314,6 +314,9 @@ class QuestionAnalyzer:
             # between embedding models, so this is how users tune the threshold
             'similarity_stats': self.similarity_analyzer.last_similarity_stats,
             'threshold_auto_adjusted': self.similarity_analyzer.threshold_auto_adjusted,
+            # The bar actually used: threshold raised above corpus noise (p90)
+            'effective_threshold': self.similarity_analyzer.effective_threshold,
+            'noise_gate': self.similarity_analyzer.noise_gate,
         }
 
     @staticmethod
@@ -323,10 +326,11 @@ class QuestionAnalyzer:
         pair so the next run produces at least one group. None when the
         current threshold already groups things (or there's nothing to group).
         """
-        stats = results.get('metadata', {}).get('similarity_stats')
+        metadata = results.get('metadata', {})
+        stats = metadata.get('similarity_stats')
         if not stats or results.get('total_groups', 0) > 0:
             return None
-        threshold = results['metadata']['similarity_threshold']
+        threshold = metadata.get('effective_threshold') or metadata['similarity_threshold']
         if stats['max'] >= threshold:
             return None
         suggestion = round(stats['max'] - 0.02, 2)

@@ -300,9 +300,9 @@ def test_default_threshold_is_model_aware(monkeypatch):
     monkeypatch.delenv('SIMILARITY_THRESHOLD', raising=False)
     monkeypatch.setenv('OLLAMA_MODEL', 'test-embed')
     analyzer = SimilarityAnalyzer(provider='ollama', use_disk_cache=False)
-    # Field-calibrated: unrelated questions in a single-domain channel score
-    # ~0.65-0.72 with nomic, so the default must sit above that band
-    assert analyzer.similarity_threshold == 0.80
+    # Field-calibrated upward twice: unrelated same-domain questions can
+    # score 0.8+ with nomic, so the base default is 0.85 (plus the noise gate)
+    assert analyzer.similarity_threshold == 0.85
     assert analyzer.threshold_pinned is False
 
     monkeypatch.setenv('SIMILARITY_THRESHOLD', '0.9')
@@ -357,7 +357,7 @@ def test_no_auto_adjust_into_the_noise_band(monkeypatch):
     groups = analyzer.group_similar_questions(questions)
 
     assert analyzer.threshold_auto_adjusted is False
-    assert analyzer.similarity_threshold == 0.80  # unchanged
+    assert analyzer.similarity_threshold == 0.85  # unchanged
     assert all(g['count'] == 1 for g in groups)  # honest singletons, no blob
 
 
@@ -453,3 +453,36 @@ def test_disabled_cache_does_not_write(tmp_path):
     cache.set('hello', [0.1])
     cache.save()
     assert not cache.cache_path.exists()
+
+
+def test_noise_gate_raises_the_bar_on_dense_corpora(monkeypatch):
+    """
+    Field regression: any FIXED threshold eventually sits inside some corpus's
+    noise band. The bar must rise above the measured pairwise bulk (p90).
+    """
+    analyzer = make_analyzer(monkeypatch, threshold='0.85')
+
+    # Dense corpus: the bulk of pairs sits at ~0.86, above the threshold
+    analyzer.last_similarity_stats = {'max': 0.91, 'p90': 0.87, 'median': 0.84}
+    bar = analyzer._gated_threshold(12)
+    assert bar == 0.92  # p90 + 0.05
+    assert analyzer.noise_gate == 0.92
+
+    # Sparse corpus: bulk far below the threshold -> threshold unchanged
+    analyzer.last_similarity_stats = {'max': 0.9, 'p90': 0.55, 'median': 0.4}
+    assert analyzer._gated_threshold(12) == 0.85
+    assert analyzer.noise_gate is None
+
+
+def test_noise_gate_skipped_on_tiny_corpora(monkeypatch):
+    """p90 is meaningless with a handful of pairs; the gate must not engage."""
+    analyzer = make_analyzer(monkeypatch, threshold='0.85')
+    analyzer.last_similarity_stats = {'max': 0.91, 'p90': 0.9, 'median': 0.9}
+    assert analyzer._gated_threshold(4) == 0.85
+    assert analyzer.noise_gate is None
+
+
+def test_noise_gate_capped(monkeypatch):
+    analyzer = make_analyzer(monkeypatch, threshold='0.85')
+    analyzer.last_similarity_stats = {'max': 0.99, 'p90': 0.97, 'median': 0.95}
+    assert analyzer._gated_threshold(20) == 0.95  # never above the cap
