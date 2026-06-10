@@ -112,6 +112,24 @@
     }
   }
 
+  // Start downloading a missing Ollama model server-side.
+  async function pullModel(model) {
+    const response = await fetch(`${API_BASE}/api/models/pull`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.success === false) {
+      throw new Error(data.error || `Could not start download (${response.status})`);
+    }
+  }
+
+  // Progress of a model download: {status, completed, total, detail}.
+  function pullStatus(model) {
+    return getJSON(`/api/models/pull/${encodeURIComponent(model)}`);
+  }
+
   // Request cancellation of a queued or running job.
   async function cancelJob(jobId) {
     try {
@@ -120,7 +138,7 @@
   }
 
   window.QA_API = { API_BASE, health, latestAnalysis, listAnalyses, getAnalysis,
-    deleteAnalysis, exportUrl, latestWeekly, analyze, cancelJob };
+    deleteAnalysis, exportUrl, latestWeekly, analyze, cancelJob, pullModel, pullStatus };
 
   // ---- Analysis settings (provider + threshold), persisted locally ----
   const SETTINGS_KEY = 'qa-analysis-settings';

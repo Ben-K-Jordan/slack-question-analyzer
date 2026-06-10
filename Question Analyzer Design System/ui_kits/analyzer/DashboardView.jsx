@@ -17,16 +17,44 @@ function DashboardView() {
 
   const PAGE_SIZE = 50;
   // First-run onboarding: surface backend/model setup problems before the
-  // user wastes an upload finding out
-  const [backendSetup, setBackendSetup] = React.useState(null);
-  React.useEffect(() => {
+  // user wastes an upload finding out. Missing Ollama models get a one-click
+  // download button instead of terminal instructions.
+  const [setupHealth, setSetupHealth] = React.useState(null); // health payload when not ok
+  const [pulls, setPulls] = React.useState({}); // model -> {pct, detail, error}
+  const checkHealth = React.useCallback(() => {
     if (!window.QA_API) return;
-    let cancelled = false;
     window.QA_API.health(window.QA_SETTINGS && window.QA_SETTINGS.get().provider)
-      .then((h) => { if (!cancelled && h.status !== 'ok') setBackendSetup(h.message || 'The analysis backend is not ready.'); })
-      .catch(() => { if (!cancelled) setBackendSetup('Cannot reach the analyzer backend. Start it with: python api_server.py'); });
-    return () => { cancelled = true; };
+      .then((h) => setSetupHealth(h.status === 'ok' ? null : h))
+      .catch(() => setSetupHealth({ status: 'unavailable',
+        message: 'Cannot reach the analyzer backend. Start it with: python api_server.py' }));
   }, []);
+  React.useEffect(() => { checkHealth(); }, [checkHealth]);
+
+  const downloadModel = async (model) => {
+    try {
+      setPulls((p) => ({ ...p, [model]: { pct: 0, detail: 'starting…' } }));
+      await window.QA_API.pullModel(model);
+      const timer = setInterval(async () => {
+        try {
+          const s = await window.QA_API.pullStatus(model);
+          if (s.status === 'done') { clearInterval(timer); setPulls((p) => ({ ...p, [model]: null })); checkHealth(); }
+          else if (s.status === 'error') { clearInterval(timer); setPulls((p) => ({ ...p, [model]: { error: s.detail } })); }
+          else setPulls((p) => ({ ...p, [model]: { pct: s.total ? Math.round(s.completed / s.total * 100) : 0, detail: s.detail } }));
+        } catch (err) { /* keep polling */ }
+      }, 1000);
+    } catch (err) {
+      setPulls((p) => ({ ...p, [model]: { error: err.message } }));
+    }
+  };
+
+  // Models the banner should offer to download (Ollama reachable but missing)
+  const missingModels = [];
+  if (setupHealth && setupHealth.ollama && setupHealth.ollama.reachable) {
+    if (!setupHealth.ollama.model_available) missingModels.push(setupHealth.ollama.model);
+    if (!setupHealth.ollama.label_model_available && setupHealth.ollama.label_model) {
+      missingModels.push(setupHealth.ollama.label_model);
+    }
+  }
 
   const isDemo = !analysisResults;
   const d = analysisResults ? transformAnalysisResults(analysisResults) : window.DASHBOARD_DATA;
@@ -107,13 +135,36 @@ function DashboardView() {
         </div>
       </Reveal>
 
-      {backendSetup ? (
+      {setupHealth ? (
         <Reveal delay={100}>
           <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: '16px 24px', background: '#fff', border: '1px solid var(--border-subtle)', borderLeft: '3px solid var(--red-60)', marginBottom: 32 }}>
             <span style={{ color: 'var(--red-60)', flex: '0 0 auto', marginTop: 1 }}><Icon name="alert-triangle" size={16} /></span>
-            <span style={{ fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.55 }}>
-              <b>Setup needed before analyzing:</b> {backendSetup}
-            </span>
+            <div style={{ fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.55, minWidth: 0, flex: 1 }}>
+              <b>Setup needed before analyzing.</b>
+              {missingModels.length === 0 ? <span> {setupHealth.message}</span> : null}
+              {missingModels.map((model) => (
+                <div key={model} style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 10 }}>
+                  {pulls[model] && pulls[model].error ? (
+                    <span style={{ color: 'var(--red-60)' }}>Download of {model} failed: {pulls[model].error}</span>
+                  ) : pulls[model] ? (
+                    <React.Fragment>
+                      <span style={{ whiteSpace: 'nowrap' }}>Downloading <b>{model}</b>… {pulls[model].pct}%</span>
+                      <div style={{ flex: 1, height: 4, background: 'var(--gray-20)', overflow: 'hidden', minWidth: 80 }}>
+                        <div style={{ height: '100%', width: `${pulls[model].pct}%`, background: 'var(--blue-60)', transition: 'width 600ms linear' }} />
+                      </div>
+                    </React.Fragment>
+                  ) : (
+                    <React.Fragment>
+                      <span>Model <b>{model}</b> isn't downloaded yet.</span>
+                      <button onClick={() => downloadModel(model)}
+                        style={{ height: 28, padding: '0 12px', display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--blue-60)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 12.5, whiteSpace: 'nowrap' }}>
+                        <Icon name="download" size={13} /> Download now
+                      </button>
+                    </React.Fragment>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         </Reveal>
       ) : null}

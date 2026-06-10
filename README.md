@@ -24,6 +24,30 @@ AI-powered tool that analyzes Slack questions, groups similar ones together, and
 - **Multiple Output Formats**: Export results as JSON, CSV, or a Markdown report
 - **CLI Interface**: Easy-to-use command-line tool
 
+## Quick Start (give this to a teammate)
+
+Clone the repo, then run the setup script for your platform — it checks Python,
+installs everything, downloads the AI models, and opens the dashboard:
+
+```powershell
+# Windows (PowerShell)
+powershell -ExecutionPolicy Bypass -File setup.ps1
+```
+
+```bash
+# macOS / Linux
+./setup.sh
+```
+
+The only manual prerequisite is [Ollama](https://ollama.com/download) — if it isn't
+installed, the script says so and where to get it. After setup, starting the app is
+just `python api_server.py` (the browser opens automatically). If a model is missing,
+the dashboard offers a **Download now** button — no terminal needed. And when something
+seems off, `slack-analyzer doctor` checks the whole setup and prints exact fixes.
+
+Prefer containers? `docker compose up -d` runs everything **including** the model
+downloads — then open http://localhost:5000.
+
 ## Installation
 
 ### Prerequisites
