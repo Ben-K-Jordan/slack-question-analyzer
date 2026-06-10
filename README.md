@@ -305,27 +305,35 @@ Upload a transcript via the upload modal. The progress bar reflects real backend
 automatically reloads your most recent analysis after a page refresh.
 
 Dashboard features:
-- **History** (clock icon): browse and reload any past analysis
+- **Export buttons**: download the displayed analysis as a Markdown report or CSV
+- **History** (clock icon): browse, reload, or delete any past analysis
 - **Settings** (gear icon): choose the AI provider and similarity threshold used for
   new analyses (persisted in the browser)
 - **Week in Review**: real weekly trends computed from your latest analysis — volume
   vs last week, 6-week trend, and per-topic rank movement (weeks are anchored to the
   most recent question date in the transcript, so historical exports work too)
+- Until your first analysis, both views show demo data clearly labeled "sample data"
 
-Server settings via environment variables: `API_HOST` (default `127.0.0.1`),
-`API_PORT` (default `5000`), `FLASK_DEBUG`, `MAX_CONTENT_MB` (default `50`),
-`ANALYSES_DIR` (default `analyses/`).
+Analyses are queued one at a time by default so a local Ollama isn't overloaded
+(`MAX_CONCURRENT_JOBS` to change). Other server settings: `API_HOST` (default
+`127.0.0.1`), `API_PORT` (default `5000`), `FLASK_DEBUG`, `MAX_CONTENT_MB`
+(default `50`), `ANALYSES_DIR` (default `analyses/`).
+
+> **Security note:** the server has no authentication and CORS is open — it is meant
+> to run on your own machine. Don't set `API_HOST=0.0.0.0` on a shared network.
 
 ### API Endpoints
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/health` | GET | Health check — also verifies Ollama is reachable and the model is pulled |
+| `/api/health` | GET | Health check — verifies Ollama/keys for the configured provider (or `?provider=...`) |
 | `/api/analyze` | POST | Start an analysis job. Body: `{"content": "...", "provider": "ollama", "threshold": 0.85}`. Returns `202` with `{"job_id": "..."}` |
-| `/api/jobs/<job_id>` | GET | Job status and progress; includes the full result when done |
+| `/api/jobs/<job_id>` | GET | Job status (`queued`/`running`/`done`/`error`) and progress; includes the full result when done |
 | `/api/analyses` | GET | List of saved past analyses (newest first) |
 | `/api/analyses/latest` | GET | Full results of the most recent analysis |
 | `/api/analyses/<id>` | GET | Full results of a specific analysis |
+| `/api/analyses/<id>` | DELETE | Delete a saved analysis |
+| `/api/analyses/<id>/export` | GET | Download as `?format=md`, `csv`, or `json` |
 | `/api/analyses/latest/weekly` | GET | Week-in-Review stats for the most recent analysis |
 | `/api/analyses/<id>/weekly` | GET | Week-in-Review stats for a specific analysis |
 | `/api/config` | GET | Current provider/threshold configuration |

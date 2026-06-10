@@ -33,7 +33,6 @@ function WeekView() {
   const max = d.groups[0].count;
   const rising = d.deltaPct >= 0;
   const deltaColor = rising ? 'var(--green-60)' : 'var(--red-60)';
-  const chev = { width: 32, height: 32, border: '1px solid var(--border-subtle)', background: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'var(--text-secondary)' };
 
   return (
     <div style={{ maxWidth: 1040, margin: '0 auto', padding: '36px 40px 80px', width: '100%' }}>
@@ -45,10 +44,8 @@ function WeekView() {
             </div>
             <div style={{ fontSize: 22, fontWeight: 300, letterSpacing: '-.01em', marginTop: 4 }}>{d.weekLabel}</div>
           </div>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <span style={chev}><Icon name="chevron-left" size={16} /></span>
-            <span style={{ ...chev, width: 'auto', padding: '0 12px', fontSize: 13, gap: 6, color: 'var(--text-secondary)' }}><Icon name="calendar" size={14} /> This week</span>
-            <span style={{ ...chev, color: 'var(--text-placeholder)' }}><Icon name="chevron-right" size={16} /></span>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 32, padding: '0 12px', border: '1px solid var(--border-subtle)', background: '#fff', fontSize: 13, color: 'var(--text-secondary)' }}>
+            <Icon name="calendar" size={14} /> Latest week
           </div>
         </div>
       </Reveal>

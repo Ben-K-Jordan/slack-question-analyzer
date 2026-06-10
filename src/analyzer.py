@@ -3,8 +3,8 @@ Main analyzer module that orchestrates question extraction, grouping, and rankin
 """
 
 import os
-import csv
 import json
+import logging
 from typing import List, Dict, Optional, Literal
 from datetime import datetime, timezone
 import numpy as np
@@ -12,6 +12,9 @@ from dotenv import load_dotenv
 from .question_extractor import QuestionExtractor
 from .similarity_analyzer import SimilarityAnalyzer
 from .group_labeler import GroupLabeler
+from .exporters import to_csv, to_markdown
+
+logger = logging.getLogger(__name__)
 
 # Caps keep the optional LLM passes fast on huge transcripts
 MAX_LABELED_GROUPS = 20
@@ -93,10 +96,10 @@ class QuestionAnalyzer:
                 progress_callback(stage, completed, total)
 
         report('extracting')
-        print("Step 1: Extracting questions from Slack content...")
+        logger.info("Step 1: Extracting questions from Slack content...")
         messages = self.extractor.extract_messages(content)
         questions = self.extractor.questions_from_messages(messages)
-        print(f"Found {len(questions)} questions")
+        logger.info("Found %d questions", len(questions))
         report('extracting', 1, 1)
 
         # Optional LLM pass: catch implicit help requests the regex missed
@@ -116,17 +119,17 @@ class QuestionAnalyzer:
         verifier = (self.labeler.verify_same_topic
                     if self._llm_enabled(self._verify_mode) else None)
 
-        print("\nStep 2: Grouping similar questions using AI...")
+        logger.info("Step 2: Grouping similar questions using AI...")
         groups = self.similarity_analyzer.group_similar_questions(
             questions,
             progress_callback=(lambda done, total: report('embedding', done, total)),
             verifier=verifier
         )
-        print(f"Created {len(groups)} question groups")
+        logger.info("Created %d question groups", len(groups))
         report('grouping', 1, 1)
 
         # Add keywords and date ranges to each group
-        print("\nStep 3: Extracting keywords from groups...")
+        logger.info("Step 3: Extracting keywords from groups...")
         for group in groups:
             group['keywords'] = self._extract_keywords(group['questions'])
             group['date_range'] = self._date_range(group['questions'])
@@ -154,7 +157,7 @@ class QuestionAnalyzer:
         # Optional LLM pass: 2-3 sentence executive summary
         if self._llm_enabled(self._summary_mode) and multi_question_groups:
             report('summarizing', 0, 1)
-            print("\nGenerating executive summary...")
+            logger.info("Generating executive summary...")
             result['executive_summary'] = self.labeler.summarize_analysis(
                 multi_question_groups, len(questions))
             report('summarizing', 1, 1)
@@ -178,7 +181,7 @@ class QuestionAnalyzer:
         if not unmatched:
             return []
 
-        print(f"Checking {len(unmatched)} unmatched messages for implicit questions...")
+        logger.info("Checking %d unmatched messages for implicit questions...", len(unmatched))
         batches = [unmatched[i:i + DETECT_BATCH_SIZE]
                    for i in range(0, len(unmatched), DETECT_BATCH_SIZE)]
         found = []
@@ -199,7 +202,7 @@ class QuestionAnalyzer:
             report('detecting', batch_num, len(batches))
 
         if found:
-            print(f"LLM found {len(found)} additional question(s)")
+            logger.info("LLM found %d additional question(s)", len(found))
         return found
 
     def _detect_answers(self, questions: List[Dict], groups: List[Dict], report) -> int:
@@ -210,7 +213,7 @@ class QuestionAnalyzer:
         if not candidates:
             return 0
 
-        print(f"\nChecking {len(candidates)} threads for answers...")
+        logger.info("Checking %d threads for answers...", len(candidates))
         report('answers', 0, len(candidates))
         answered_total = 0
         for i, question in enumerate(candidates, 1):
@@ -245,7 +248,7 @@ class QuestionAnalyzer:
         use_llm = self.labeler is not None and (self._labels_forced or self.labeler.available())
 
         if use_llm and candidates:
-            print(f"\nStep 4: Generating topic labels with {self.labeler.model}...")
+            logger.info("Step 4: Generating topic labels with %s...", self.labeler.model)
             report('labeling', 0, len(candidates))
             for i, group in enumerate(candidates, 1):
                 sample = self._diverse_sample(group['questions'])
@@ -325,7 +328,7 @@ class QuestionAnalyzer:
         Returns:
             Analysis results dictionary
         """
-        print(f"Reading input from: {input_path}")
+        logger.info("Reading input from: %s", input_path)
 
         with open(input_path, 'r', encoding='utf-8') as f:
             content = f.read()
@@ -333,7 +336,7 @@ class QuestionAnalyzer:
         results = self.analyze_slack_content(content)
 
         if output_path:
-            print(f"\nSaving results to: {output_path}")
+            logger.info("Saving results to: %s", output_path)
             self.save_results(results, output_path)
 
         return results
@@ -352,73 +355,12 @@ class QuestionAnalyzer:
     def export_csv(self, results: Dict, output_path: str):
         """Export grouped questions as a flat CSV (one row per question)."""
         with open(output_path, 'w', encoding='utf-8', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(['group_rank', 'group_count', 'representative_question',
-                             'keywords', 'avg_similarity', 'question', 'date'])
-            for rank, group in enumerate(results['groups'], 1):
-                for q in group['questions']:
-                    writer.writerow([
-                        rank, group['count'], group['representative_question'],
-                        '; '.join(group['keywords']), f"{group['avg_similarity']:.4f}",
-                        q['text'], q.get('date', 'Unknown')
-                    ])
-            for q in results.get('ungrouped_questions', []):
-                writer.writerow(['', 1, q['text'], '', '', q['text'],
-                                 q.get('date', 'Unknown')])
+            f.write(to_csv(results))
 
     def export_markdown(self, results: Dict, output_path: str):
         """Export results as a readable Markdown report."""
-        meta = results['metadata']
-        lines = [
-            '# Question Analysis Report',
-            '',
-            f"- **Analyzed at:** {meta['analyzed_at']}",
-            f"- **Provider / model:** {meta['provider']} / {meta['model']}",
-            f"- **Similarity threshold:** {meta['similarity_threshold']}",
-            f"- **Total questions:** {results['total_questions']}",
-            f"- **Question groups:** {results['total_groups']}",
-            f"- **Unique (ungrouped) questions:** {len(results.get('ungrouped_questions', []))}",
-            '',
-        ]
-        if results.get('executive_summary'):
-            lines += ['## Executive Summary', '', results['executive_summary'], '']
-        lines += ['## Top Question Groups', '']
-
-        for rank, group in enumerate(results['groups'], 1):
-            title = group.get('topic') or ''
-            lines.append(f"### #{rank} — {title + ' — ' if title else ''}asked {group['count']} times")
-            lines.append('')
-            lines.append(f"**{group['representative_question']}**")
-            lines.append('')
-            if group.get('summary'):
-                lines.append(group['summary'])
-                lines.append('')
-            if group.get('keywords'):
-                lines.append(f"Keywords: {', '.join(group['keywords'])}")
-            date_range = group.get('date_range') or {}
-            if date_range.get('first_asked'):
-                lines.append(f"First asked: {date_range['first_asked']} — "
-                             f"Last asked: {date_range['last_asked']}")
-            lines.append(f"Average similarity: {group['avg_similarity']:.2%}")
-            lines.append('')
-            lines.append('<details><summary>All questions in this group</summary>')
-            lines.append('')
-            for q in group['questions']:
-                lines.append(f"- {q['text']} _({q.get('date', 'Unknown')})_")
-            lines.append('')
-            lines.append('</details>')
-            lines.append('')
-
-        ungrouped = results.get('ungrouped_questions', [])
-        if ungrouped:
-            lines.append(f"## Unique Questions ({len(ungrouped)})")
-            lines.append('')
-            for q in ungrouped:
-                lines.append(f"- {q['text']} _({q.get('date', 'Unknown')})_")
-            lines.append('')
-
         with open(output_path, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(lines))
+            f.write(to_markdown(results))
 
     def _extract_keywords(self, questions: List[Dict]) -> List[str]:
         """
@@ -469,8 +411,16 @@ class QuestionAnalyzer:
         print(f"\nTotal Questions Analyzed: {results['total_questions']}")
         print(f"Question Groups Found: {results['total_groups']}")
         print(f"Ungrouped Questions: {len(results['ungrouped_questions'])}")
+        if results.get('answered_questions'):
+            print(f"Answered (via thread replies): {results['answered_questions']}")
         print(f"Similarity Threshold: {results['metadata']['similarity_threshold']}")
         print(f"Model Used: {results['metadata']['model']}")
+
+        if results.get('executive_summary'):
+            print("\n" + "-"*80)
+            print("EXECUTIVE SUMMARY")
+            print("-"*80)
+            print(results['executive_summary'])
 
         if results['groups']:
             print("\n" + "-"*80)
@@ -478,10 +428,15 @@ class QuestionAnalyzer:
             print("-"*80)
 
             for i, group in enumerate(results['groups'][:10], 1):  # Show top 10
-                print(f"\n#{i} - Occurrences: {group['count']}")
+                topic = f" [{group['topic']}]" if group.get('topic') else ''
+                print(f"\n#{i}{topic} - Occurrences: {group['count']}")
                 print(f"Representative Question: {group['representative_question']}")
+                if group.get('summary'):
+                    print(f"Summary: {group['summary']}")
                 print(f"Keywords: {', '.join(group['keywords'])}")
                 print(f"Average Similarity: {group['avg_similarity']:.2%}")
+                if group.get('answered'):
+                    print(f"Answered: {group['answered']} of {group['count']}")
 
                 if group['count'] <= 5:  # Show all questions if 5 or fewer
                     print("All questions in this group:")

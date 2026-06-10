@@ -1,4 +1,4 @@
-// Modal shell + Upload-transcript and Connect-email flows.
+// Modal shell + upload, history, and settings flows.
 function Modal({ open, onClose, children, width = 480 }) {
   const [render, setRender] = React.useState(open);
   const [vis, setVis] = React.useState(false);
@@ -61,7 +61,8 @@ function UploadModal({ open, onClose, onImported }) {
   // Map backend progress events onto the step list and percent bar.
   const onProgress = ({ stage, completed, total }) => {
     const share = total > 0 ? completed / total : 1;
-    if (stage === 'starting') { setActiveStep(0); setProgress(2); }
+    if (stage === 'queued') { setActiveStep(0); setProgress(2); }
+    else if (stage === 'starting') { setActiveStep(0); setProgress(3); }
     else if (stage === 'extracting') { setActiveStep(1); setProgress(completed ? 6 : 4); }
     else if (stage === 'detecting') { setActiveStep(1); setProgress(Math.round(6 + share * 4)); }
     else if (stage === 'embedding') { setActiveStep(2); setProgress(Math.round(12 + share * 70)); }
@@ -82,8 +83,10 @@ function UploadModal({ open, onClose, onImported }) {
     setError(null);
 
     try {
-      // Fail fast with a clear message if the backend/Ollama isn't ready
-      const status = await window.QA_API.health().catch(() => {
+      const settings = window.QA_SETTINGS.get();
+
+      // Fail fast with a clear message if the backend/provider isn't ready
+      const status = await window.QA_API.health(settings.provider).catch(() => {
         throw new Error('Cannot reach the analyzer backend. Start it with: python api_server.py');
       });
       if (status.status !== 'ok') {
@@ -91,7 +94,7 @@ function UploadModal({ open, onClose, onImported }) {
       }
 
       const content = await file.text();
-      const data = await window.QA_API.analyze(content, window.QA_SETTINGS.get(), onProgress);
+      const data = await window.QA_API.analyze(content, settings, onProgress);
 
       setProgress(100);
       setResults(data);
@@ -179,60 +182,6 @@ function UploadModal({ open, onClose, onImported }) {
   );
 }
 
-// ---- Connect email / manage ----
-function SignInModal({ open, onClose, account, onConnect, onDisconnect }) {
-  const { Button } = window.QuestionAnalyzerDesignSystem_03a921;
-  const [email, setEmail] = React.useState('');
-  const [focus, setFocus] = React.useState(false);
-  React.useEffect(() => { if (!open) { setEmail(''); setFocus(false); } }, [open]);
-  const valid = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email);
-
-  if (account) {
-    return (
-      <Modal open={open} onClose={onClose} width={440}>
-        <ModalHead title="Weekly report" sub={null} onClose={onClose} />
-        <div style={{ padding: '0 24px 24px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', background: 'var(--gray-10)', borderLeft: '3px solid var(--green-60)', marginBottom: 18 }}>
-            <span style={{ width: 36, height: 36, borderRadius: '50%', background: 'var(--blue-60)', color: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600, fontSize: 13 }}>{account.initials}</span>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 14, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis' }}>{account.email}</div>
-              <div style={{ fontSize: 12, color: 'var(--green-60)', display: 'inline-flex', alignItems: 'center', gap: 5 }}><Icon name="check" size={12} /> Weekly digest active</div>
-            </div>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0', borderTop: '1px solid var(--border-subtle)', fontSize: 13.5 }}>
-            <span>Next digest</span><span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>Mon, Jun 15 · 9:00</span>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 18 }}>
-            <Button variant="ghost" icon={<Icon name="log-out" size={16} />} onClick={onDisconnect}>Disconnect</Button>
-            <Button variant="primary" onClick={onClose}>Done</Button>
-          </div>
-        </div>
-      </Modal>
-    );
-  }
-
-  return (
-    <Modal open={open} onClose={onClose} width={440}>
-      <ModalHead title="Get your weekly report" sub="Connect your email and we'll send a Week-in-Review digest — top questions and what's trending — every Monday morning." onClose={onClose} />
-      <div style={{ padding: '0 24px 24px' }}>
-        <label style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Work email</label>
-        <div style={{ display: 'flex', alignItems: 'center', height: 44, padding: '0 14px', background: 'var(--field)', borderBottom: `2px solid ${focus ? 'var(--blue-60)' : 'var(--border-strong)'}`, transition: 'border-color var(--duration-base)' }}>
-          <Icon name="mail" size={16} color="var(--text-helper)" />
-          <input type="email" value={email} placeholder="you@webmethods.io" autoFocus
-            onFocus={() => setFocus(true)} onBlur={() => setFocus(false)}
-            onChange={(e) => setEmail(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && valid) onConnect(email); }}
-            style={{ border: 'none', outline: 'none', background: 'transparent', marginLeft: 10, fontFamily: 'var(--font-sans)', fontSize: 15, width: '100%', color: 'var(--text-primary)' }} />
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-helper)', margin: '14px 0 4px' }}>
-          <Icon name="calendar-clock" size={14} /> Delivered Mondays · unsubscribe anytime
-        </div>
-        <Button variant="primary" fullWidth disabled={!valid} icon={<Icon name="arrow-right" size={16} />} onClick={() => onConnect(email)}>Connect email</Button>
-      </div>
-    </Modal>
-  );
-}
-
 // ---- Analysis history ----
 function HistoryModal({ open, onClose, onLoad }) {
   const { Button } = window.QuestionAnalyzerDesignSystem_03a921;
@@ -256,6 +205,16 @@ function HistoryModal({ open, onClose, onLoad }) {
     } catch (err) {
       setError(err.message);
       setLoadingId(null);
+    }
+  };
+
+  const remove = async (e, id) => {
+    e.stopPropagation();
+    try {
+      await window.QA_API.deleteAnalysis(id);
+      setItems((current) => (current || []).filter((item) => item.id !== id));
+    } catch (err) {
+      setError(err.message);
     }
   };
 
@@ -284,22 +243,32 @@ function HistoryModal({ open, onClose, onLoad }) {
         {items && items.length > 0 ? (
           <div style={{ border: '1px solid var(--border-subtle)', borderBottom: 'none', maxHeight: 360, overflowY: 'auto' }}>
             {items.map((item) => (
-              <button key={item.id} onClick={() => pick(item.id)} disabled={loadingId !== null}
-                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '14px 16px', background: '#fff', border: 'none', borderBottom: '1px solid var(--border-subtle)', cursor: loadingId ? 'wait' : 'pointer', fontFamily: 'var(--font-sans)' }}
+              <div key={item.id} role="button" tabIndex={0}
+                onClick={() => loadingId === null && pick(item.id)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && loadingId === null) pick(item.id); }}
+                style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '14px 16px', background: '#fff', borderBottom: '1px solid var(--border-subtle)', cursor: loadingId ? 'wait' : 'pointer', fontFamily: 'var(--font-sans)', boxSizing: 'border-box' }}
                 onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--gray-10)'; }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = '#fff'; }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
-                  <span style={{ fontSize: 13.5, fontWeight: 500, color: 'var(--text-primary)' }}>{when(item.analyzed_at)}</span>
-                  <span style={{ fontSize: 12, color: 'var(--text-helper)', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>
-                    {loadingId === item.id ? 'Loading…' : `${item.total_questions} questions · ${item.total_groups} groups`}
-                  </span>
-                </div>
-                {item.top_question ? (
-                  <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    Top: {item.top_question}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
+                    <span style={{ fontSize: 13.5, fontWeight: 500, color: 'var(--text-primary)' }}>{when(item.analyzed_at)}</span>
+                    <span style={{ fontSize: 12, color: 'var(--text-helper)', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>
+                      {loadingId === item.id ? 'Loading…' : `${item.total_questions} questions · ${item.total_groups} groups`}
+                    </span>
                   </div>
-                ) : null}
-              </button>
+                  {item.top_question ? (
+                    <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      Top: {item.top_question}
+                    </div>
+                  ) : null}
+                </div>
+                <button onClick={(e) => remove(e, item.id)} title="Delete this analysis" aria-label="Delete this analysis"
+                  style={{ width: 28, height: 28, flex: '0 0 auto', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-helper)' }}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--red-60)'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-helper)'; }}>
+                  <Icon name="trash-2" size={15} />
+                </button>
+              </div>
             ))}
           </div>
         ) : null}
@@ -362,4 +331,4 @@ function SettingsModal({ open, onClose }) {
   );
 }
 
-Object.assign(window, { UploadModal, SignInModal, HistoryModal, SettingsModal });
+Object.assign(window, { UploadModal, HistoryModal, SettingsModal });

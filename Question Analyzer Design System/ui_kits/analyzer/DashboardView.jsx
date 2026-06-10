@@ -15,8 +15,18 @@ function DashboardView() {
     return () => { cancelled = true; };
   }, []);
 
+  const isDemo = !analysisResults;
   const d = analysisResults ? transformAnalysisResults(analysisResults) : window.DASHBOARD_DATA;
   const [query, setQuery] = React.useState('');
+
+  const exportBtn = {
+    height: 32, padding: '0 12px', display: 'inline-flex', alignItems: 'center', gap: 6,
+    background: '#fff', color: 'var(--text-secondary)', border: '1px solid var(--border-strong)',
+    fontFamily: 'var(--font-sans)', fontSize: 12.5, cursor: 'pointer', whiteSpace: 'nowrap',
+  };
+  const download = (format) => {
+    if (window.ANALYSIS_ID) window.open(window.QA_API.exportUrl(window.ANALYSIS_ID, format), '_blank');
+  };
   const max = d.groups && d.groups.length > 0 ? d.groups[0].count : 0;
   const groups = d.groups ? d.groups.filter((g) =>
     g.question.toLowerCase().includes(query.toLowerCase()) ||
@@ -43,12 +53,27 @@ function DashboardView() {
         <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 24, flexWrap: 'wrap', marginBottom: 30 }}>
           <div>
             <h1 style={{ fontSize: 32, fontWeight: 300, letterSpacing: '-.02em', margin: '0 0 6px' }}>Most-asked questions</h1>
-            <div style={{ fontSize: 14, color: 'var(--text-secondary)' }}>All-time across your monitored Slack channels · ranked by occurrences</div>
+            <div style={{ fontSize: 14, color: 'var(--text-secondary)' }}>
+              All-time across your monitored Slack channels · ranked by occurrences
+              {isDemo ? <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 600, letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--purple-60)', background: 'var(--gray-10)', padding: '2px 8px' }}>Sample data</span> : null}
+            </div>
           </div>
-          <div style={search}>
-            <Icon name="search" size={16} color="var(--text-helper)" />
-            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter questions or topics"
-              style={{ border: 'none', outline: 'none', background: 'transparent', fontFamily: 'var(--font-sans)', fontSize: 14, width: '100%', color: 'var(--text-primary)' }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            {!isDemo && window.ANALYSIS_ID ? (
+              <React.Fragment>
+                <button style={exportBtn} title="Download Markdown report" onClick={() => download('md')}>
+                  <Icon name="download" size={14} /> Report
+                </button>
+                <button style={exportBtn} title="Download CSV" onClick={() => download('csv')}>
+                  <Icon name="download" size={14} /> CSV
+                </button>
+              </React.Fragment>
+            ) : null}
+            <div style={search}>
+              <Icon name="search" size={16} color="var(--text-helper)" />
+              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter questions or topics"
+                style={{ border: 'none', outline: 'none', background: 'transparent', fontFamily: 'var(--font-sans)', fontSize: 14, width: '100%', color: 'var(--text-primary)' }} />
+            </div>
           </div>
         </div>
       </Reveal>
