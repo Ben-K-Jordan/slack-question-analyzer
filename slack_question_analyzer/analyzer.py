@@ -513,31 +513,6 @@ class QuestionAnalyzer:
             'last_asked': dates[-1] if dates else None
         }
 
-    def analyze_from_file(self, input_path: str, output_path: Optional[str] = None) -> Dict:
-        """
-        Analyze questions from a file.
-
-        Args:
-            input_path: Path to input file containing Slack content
-            output_path: Optional path to save results. Format is inferred from
-                         the extension: .json, .csv, or .md
-
-        Returns:
-            Analysis results dictionary
-        """
-        logger.info("Reading input from: %s", input_path)
-
-        with open(input_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-
-        results = self.analyze_slack_content(content)
-
-        if output_path:
-            logger.info("Saving results to: %s", output_path)
-            self.save_results(results, output_path)
-
-        return results
-
     def save_results(self, results: Dict, output_path: str):
         """Save results in the format implied by the file extension."""
         lower = output_path.lower()

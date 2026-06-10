@@ -358,7 +358,7 @@ the dashboard, so the whole app runs with one command.
    ```bash
    ollama serve
    ```
-2. **Start the server** (`run_api_server.bat` on Windows, or):
+2. **Start the server** (`start.bat` on Windows, or):
    ```bash
    python api_server.py
    ```
@@ -493,7 +493,6 @@ slack-question-analyzer/
 │   └── exporters.py        # CSV / Markdown export
 ├── tests/                  # pytest suite
 ├── api_server.py           # Flask API + dashboard server
-├── run_api_server.bat      # Windows launcher for the API server
 ├── Question Analyzer Design System/  # React dashboard + design system
 ├── pyproject.toml          # Package metadata & dependencies
 ├── Dockerfile / docker-compose.yml   # Container setup
