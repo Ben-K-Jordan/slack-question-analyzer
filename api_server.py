@@ -754,13 +754,19 @@ def choose_port(host, preferred, attempts=5):
     """
     First free port starting at `preferred`. macOS reserves 5000 for AirPlay
     and other apps collide too — falling back beats failing to start.
+
+    The probe must NOT set SO_REUSEADDR: on Windows that allows binding a
+    port another process is actively listening on, which lets a forgotten
+    old server instance silently keep receiving all the traffic.
     """
     import socket
     for offset in range(attempts):
         port = preferred + offset
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                if hasattr(socket, 'SO_EXCLUSIVEADDRUSE'):  # Windows: strict
+                    probe.setsockopt(socket.SOL_SOCKET,
+                                     socket.SO_EXCLUSIVEADDRUSE, 1)
                 probe.bind((host, port))
             if offset:
                 logger.warning("Port %d is in use; using %d instead", preferred, port)
