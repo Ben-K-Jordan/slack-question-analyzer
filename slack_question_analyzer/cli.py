@@ -11,7 +11,7 @@ from .inputs import load_input_files
 
 
 @click.group()
-@click.version_option(version='2.4.0')
+@click.version_option(version='2.5.0')
 @click.option('--verbose', '-v', is_flag=True, help='Show debug-level logs')
 def cli(verbose):
     """
@@ -105,12 +105,16 @@ def setup():
     ]
 
     if provider == 'ollama':
+        from .model_defaults import default_generation_model, total_ram_gb
         click.echo("\nOllama Configuration (Local & Free)")
         ollama_url = click.prompt('Ollama URL', default='http://localhost:11434')
         ollama_model = click.prompt('Embedding model', default='nomic-embed-text')
+        ram = total_ram_gb()
+        if ram:
+            click.echo(f"Detected {ram:.0f}GB RAM — suggesting a chat model sized for this machine.")
         generation_model = click.prompt(
             'Chat model for LLM features (topic labels, summaries, etc.)',
-            default='llama3.2')
+            default=default_generation_model())
 
         env_content.extend([
             "# Ollama Configuration",
@@ -213,9 +217,10 @@ def doctor():
     click.echo(f"[INFO] Provider: {provider}")
 
     if provider == 'ollama':
+        from .model_defaults import default_generation_model, FALLBACK_GENERATION_MODEL
         url = os.getenv('OLLAMA_URL', 'http://localhost:11434').rstrip('/')
         embed_model = os.getenv('OLLAMA_MODEL', 'nomic-embed-text')
-        gen_model = os.getenv('OLLAMA_GENERATION_MODEL', 'llama3.2')
+        gen_model = default_generation_model()
         try:
             names = [m.get('name', '') for m in
                      requests.get(f"{url}/api/tags", timeout=3).json().get('models', [])]
@@ -225,6 +230,10 @@ def doctor():
                   f'ollama pull {embed_model}')
             if has(gen_model):
                 check(True, f"Chat model '{gen_model}' downloaded (topic labels enabled)")
+            elif (not os.getenv('OLLAMA_GENERATION_MODEL')
+                  and has(FALLBACK_GENERATION_MODEL)):
+                check(True, f"Chat model '{FALLBACK_GENERATION_MODEL}' downloaded "
+                            f"(used instead of '{gen_model}', which isn't pulled)")
             else:
                 click.echo(f"[WARN] Chat model '{gen_model}' not downloaded — topic "
                            f"labels/summaries will fall back to keywords")

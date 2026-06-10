@@ -41,10 +41,24 @@ if ! curl -s --max-time 3 http://localhost:11434/api/tags >/dev/null; then
 fi
 echo "[OK] Ollama running"
 
-# 4. Pull the models (idempotent; skips anything already downloaded)
-echo "Downloading models (first time only: ~270MB + ~2GB)..."
+# 4. Pull the models (idempotent; skips anything already downloaded).
+# Chat model is sized to the machine: 8B on >=12GB RAM, 3B otherwise.
+if [ "$(uname)" = "Darwin" ]; then
+    ram_gb=$(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1073741824 ))
+else
+    ram_gb=$(( $(awk '/MemTotal/ {print $2}' /proc/meminfo 2>/dev/null || echo 0) / 1048576 ))
+fi
+if [ "$ram_gb" -ge 12 ]; then
+    chat_model="llama3.1:8b"
+    echo "Detected ${ram_gb}GB RAM - using the larger chat model for better topic names."
+    echo "Downloading models (first time only: ~270MB + ~5GB)..."
+else
+    chat_model="llama3.2"
+    echo "Detected ${ram_gb}GB RAM - using the compact chat model."
+    echo "Downloading models (first time only: ~270MB + ~2GB)..."
+fi
 ollama pull nomic-embed-text
-ollama pull llama3.2
+ollama pull "$chat_model"
 echo "[OK] Models ready"
 
 # 5. Launch — the dashboard opens in your browser automatically
