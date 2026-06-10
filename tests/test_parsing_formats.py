@@ -86,6 +86,43 @@ def test_thread_replies_attached_to_parent_question():
                                        'thanks, worked!']
 
 
+def test_blocks_used_when_text_is_empty():
+    """Modern Slack exports: empty 'text', content in rich-text 'blocks'."""
+    content = json.dumps([{
+        'ts': '1704412800.0',
+        'text': '',
+        'blocks': [{
+            'type': 'rich_text',
+            'elements': [
+                {'type': 'rich_text_section', 'elements': [
+                    {'type': 'text', 'text': 'How do I configure '},
+                    {'type': 'link', 'url': 'https://x.test', 'text': 'the webhook'},
+                    {'type': 'text', 'text': '?'},
+                ]},
+                {'type': 'rich_text_preformatted', 'elements': [
+                    {'type': 'text', 'text': 'Traceback: should be skipped'},
+                ]},
+            ],
+        }],
+    }])
+    questions = QuestionExtractor().parse_slack_content(content)
+    assert len(questions) == 1
+    assert questions[0]['text'] == 'How do I configure the webhook?'
+    assert 'Traceback' not in questions[0]['original_message']
+
+
+def test_nonempty_text_preferred_over_blocks():
+    content = json.dumps([{
+        'ts': '1704412800.0',
+        'text': 'How do I reset my password?',
+        'blocks': [{'type': 'rich_text', 'elements': [
+            {'type': 'rich_text_section', 'elements': [
+                {'type': 'text', 'text': 'different blocks content?'}]}]}],
+    }])
+    questions = QuestionExtractor().parse_slack_content(content)
+    assert questions[0]['text'] == 'How do I reset my password?'
+
+
 def test_markup_in_json_messages_is_cleaned():
     content = json.dumps([
         {"text": "<@U123> how do I configure <http://ex.com|the webhook>?", "ts": "1704412800"},

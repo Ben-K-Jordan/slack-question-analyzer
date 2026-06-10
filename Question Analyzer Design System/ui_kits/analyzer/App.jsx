@@ -5,6 +5,7 @@ function App() {
   const [uploadOpen, setUploadOpen] = React.useState(false);
   const [historyOpen, setHistoryOpen] = React.useState(false);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const [topicsOpen, setTopicsOpen] = React.useState(false);
 
   const showAnalysis = (data) => {
     window.ANALYSIS_RESULTS = data;
@@ -16,7 +17,8 @@ function App() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#fff' }}>
       <AppHeader view={view} setView={setView} onUpload={() => setUploadOpen(true)}
-        onHistory={() => setHistoryOpen(true)} onSettings={() => setSettingsOpen(true)} />
+        onHistory={() => setHistoryOpen(true)} onTopics={() => setTopicsOpen(true)}
+        onSettings={() => setSettingsOpen(true)} />
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', background: '#fff' }}>
         <div key={`${view}:${analysisVersion}`} className="qa-view">
           {view === 'dashboard' ? <DashboardView /> : <WeekView />}
@@ -25,6 +27,7 @@ function App() {
       <UploadModal open={uploadOpen} onClose={() => setUploadOpen(false)}
         onImported={() => { setUploadOpen(false); setView('dashboard'); setAnalysisVersion((v) => v + 1); }} />
       <HistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)} onLoad={showAnalysis} />
+      <TopicsModal open={topicsOpen} onClose={() => setTopicsOpen(false)} />
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );
