@@ -32,7 +32,7 @@
       "throttle|bandwidth",
       "resum|interrupt",
       "checksum",
-      "connection pool|copy",
+      "connection pool|copy|transfer aborted|exhausted|sftp-eu",
       "login|log in|spins",
       "fips",
       "purge|90 day|older than 90",

@@ -1,6 +1,12 @@
-# The Question Funnel — Pipeline Spec (v2.34, prompt pack 16, taxonomy v3)
+# The Question Funnel — Pipeline Spec (v2.35, prompt pack 17, taxonomy v3)
 
 > Deltas since the prompts/stages quoted below were written:
+> - Eval round 9 (177/184; fixtures 2 and 5 PERFECT): rescue only
+>   completes under-grouped PAIRS (LLM_RESCUE_MAX_GROUP=2) — every
+>   mega-group across nine rounds grew by rescuing a singleton into an
+>   already-established 3+ group, which is itself evidence the singleton
+>   differs. CONSOLIDATE gains the capability-vs-limit example ('is
+>   there a max size?' / 'can it handle very large files?' = one ask).
 > - Eval round 8 (first quality-extraction round; best yet): same-source
 >   rows inside a group are now dispositioned by whether the MESSAGE
 >   enumerates separate asks ('1. ... 2. ...', 'and separately', 'two
