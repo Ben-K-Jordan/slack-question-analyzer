@@ -88,6 +88,8 @@ function DashboardView({ onUpload }) {
   const [openUnique, setOpenUnique] = React.useState(null); // expanded original message
   const [visibleCount, setVisibleCount] = React.useState(PAGE_SIZE);
   const [showUnique, setShowUnique] = React.useState(true);
+  const [showDropped, setShowDropped] = React.useState(false);
+  const [openDropped, setOpenDropped] = React.useState(null); // expanded source message
 
   const exportBtn = {
     height: 32, padding: '0 12px', display: 'inline-flex', alignItems: 'center', gap: 6,
@@ -435,6 +437,49 @@ function DashboardView({ onUpload }) {
           </ul>
         </div>
       ) : null}
+
+      {d.droppedQuestions && d.droppedQuestions.length ? (
+        <div style={{ marginTop: 28 }}>
+          <button onClick={() => setShowDropped(!showDropped)}
+            title="Provenance trail: nothing is ever silently consumed — every question any stage removed is recorded here with its reason"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)', padding: 0 }}>
+            <span style={{ display: 'inline-flex', transform: showDropped ? 'rotate(90deg)' : 'none', transition: 'transform var(--duration-base) var(--ease-productive)' }}>
+              <Icon name="chevron-right" size={14} />
+            </span>
+            Removed during analysis ({d.droppedQuestions.length}) — duplicates and phantoms, each with its reason
+          </button>
+          {showDropped ? (
+            <ul style={{ listStyle: 'none', margin: '12px 0 0', padding: 0, borderLeft: '2px solid var(--border-subtle)' }}>
+              {d.droppedQuestions.map((q, i) => {
+                const open = openDropped === i;
+                const hasSource = !!q.source;
+                return (
+                  <li key={i} onClick={() => hasSource && setOpenDropped(open ? null : i)}
+                    title={hasSource && !open ? 'Click to see the source Slack message' : undefined}
+                    style={{ padding: '8px 16px', cursor: hasSource ? 'pointer' : 'default' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
+                      <span style={{ fontSize: 13.5, color: 'var(--text-helper)', lineHeight: 1.45 }}>
+                        <span title="Why this row was removed" style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: '#8a6116', background: '#fcf4d6', padding: '1px 7px', marginRight: 8, whiteSpace: 'nowrap' }}>{q.reason}</span>
+                        <span style={{ textDecoration: 'line-through', textDecorationColor: 'var(--text-placeholder)' }}>{q.text}</span>
+                      </span>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap' }}>
+                        {q.date && q.date !== 'Unknown' ? <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-placeholder)' }}>{q.date}</span> : null}
+                        {hasSource ? <span style={{ display: 'inline-flex', color: 'var(--text-placeholder)', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform var(--duration-base) var(--ease-productive)' }}><Icon name="chevron-down" size={12} /></span> : null}
+                      </span>
+                    </div>
+                    {open ? (
+                      <div style={{ margin: '7px 0 2px', padding: '8px 12px', background: 'var(--gray-10)', fontSize: 12.5, color: 'var(--text-helper)', lineHeight: 1.5 }}>
+                        <span style={{ fontWeight: 600, letterSpacing: '.03em', textTransform: 'uppercase', fontSize: 10.5, marginRight: 8 }}>Source message</span>
+                        {q.source}
+                      </div>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -473,6 +518,9 @@ function transformAnalysisResults(results) {
     // page) — a 2x merged group must not be crowned over a 6-question theme
     topTheme: (results.themes && results.themes[0]) ? results.themes[0].name : null,
     featureRequests: results.feature_requests || [],
+    // Provenance trail: every question any stage removed, with its reason —
+    // auditable on the page instead of buried in the server console
+    droppedQuestions: results.dropped_questions || [],
     threadsPresent: !!results.threads_present,
     analyzedWith: (results.metadata && results.metadata.app_version) || null,
     // Extraction anomalies must be LOUD: silent drops were the worst bug class

@@ -11,6 +11,9 @@ the fixture measures taxonomy + clustering + prompts, not learned history.
 """
 
 import json
+import os
+import re
+import tempfile
 from itertools import combinations
 from pathlib import Path
 from typing import Dict, List, Optional, Set, FrozenSet
@@ -19,9 +22,14 @@ from .taxonomy import Taxonomy
 
 
 def load_fixture(path: str) -> Dict:
-    """Load and validate a fixture file."""
+    """Load and validate a fixture file (question-level or transcript-level)."""
     with open(path, 'r', encoding='utf-8') as f:
         data = json.load(f)
+    if data.get('type') == 'transcript':
+        if not data.get('transcript') or not isinstance(data.get('expect'), dict):
+            raise ValueError('Transcript fixture needs "transcript" (file) and "expect" (dict)')
+        data['_dir'] = str(Path(path).parent)
+        return data
     questions = data.get('questions')
     if not isinstance(questions, list) or not questions:
         raise ValueError('Fixture must contain a non-empty "questions" list')
@@ -151,4 +159,142 @@ def format_report(result: Dict) -> str:
     if not (result['routing_mismatches'] or result['missed_pairs']
             or result['wrong_pairs'] or result.get('integrity_violations')):
         lines.append('\nPerfect score.')
+    return '\n'.join(lines)
+
+
+def evaluate_transcript(analyzer, fixture: Dict) -> Dict:
+    """
+    End-to-end evaluation: run the FULL pipeline (extraction included) on a
+    raw transcript and assert the answer key's headline numbers. The
+    question-level fixture can't see extraction bugs — silent drops,
+    over-splitting, verb drift, feedback misrouting all happen before
+    routing — so this fixture type starts from the transcript itself.
+
+    The topic bank is pointed at an empty temp file for the run: learned
+    state differs per machine, and a fixture must measure the pipeline,
+    not one machine's history.
+    """
+    path = Path(fixture.get('_dir', '.')) / fixture['transcript']
+    content = path.read_text(encoding='utf-8')
+    expect = fixture['expect']
+
+    saved = {k: os.environ.get(k) for k in ('TOPIC_BANK_PATH', 'SEED_TOPICS_PATH')}
+    with tempfile.TemporaryDirectory() as td:
+        os.environ['TOPIC_BANK_PATH'] = str(Path(td) / 'bank.json')
+        os.environ['SEED_TOPICS_PATH'] = str(Path(td) / 'no_seeds.json')
+        try:
+            results = analyzer.analyze_contents([content])
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    groups = results.get('groups', [])  # recurring (count >= 2) only
+    support = ([q for g in groups for q in g['questions']]
+               + list(results.get('ungrouped_questions', [])))
+    feedback = list(results.get('feature_requests', []))
+    all_rows = support + feedback
+
+    checks: List[Dict] = []
+
+    def check(name: str, ok: bool, detail: str = ''):
+        checks.append({'name': name, 'ok': bool(ok), 'detail': detail})
+
+    def texts(rows) -> List[str]:
+        return [(r.get('text') or '') for r in rows]
+
+    def any_match(pattern: str, rows) -> bool:
+        rx = re.compile(pattern, re.IGNORECASE)
+        return any(rx.search(t) for t in texts(rows))
+
+    if 'total_asks' in expect:
+        got = results.get('total_questions', 0) + len(feedback)
+        check(f"total asks = {expect['total_asks']}", got == expect['total_asks'],
+              f"got {got} ({results.get('total_questions', 0)} support + "
+              f"{len(feedback)} feedback)")
+
+    if 'recurring_topics' in expect:
+        check(f"recurring topics = {expect['recurring_topics']}",
+              len(groups) == expect['recurring_topics'],
+              'got ' + (', '.join(f"{g['count']}x {g['representative_question'][:60]}"
+                                  for g in groups) or 'none'))
+
+    # The expected recurring group: ONE group must satisfy every pattern
+    # (each matching at least one member question)
+    if expect.get('recurring_must_match'):
+        patterns = [re.compile(p, re.IGNORECASE)
+                    for p in expect['recurring_must_match']]
+        hit = any(all(any(rx.search(t) for t in texts(g['questions']))
+                      for rx in patterns) for g in groups)
+        check('expected recurrence fired '
+              f"({' & '.join(expect['recurring_must_match'])})", hit,
+              'recurring groups: ' + (', '.join(g['representative_question'][:60]
+                                                for g in groups) or 'none'))
+
+    if 'feedback_count' in expect:
+        check(f"product feedback = {expect['feedback_count']}",
+              len(feedback) == expect['feedback_count'],
+              'got: ' + (', '.join(t[:60] for t in texts(feedback)) or 'none'))
+    for pattern in expect.get('feedback_must_match', []):
+        check(f'feedback contains /{pattern}/', any_match(pattern, feedback),
+              'feedback: ' + (', '.join(t[:60] for t in texts(feedback)) or 'none'))
+    for pattern in expect.get('feedback_must_not_match', []):
+        bad = [t for t in texts(feedback) if re.search(pattern, t, re.IGNORECASE)]
+        check(f'feedback free of /{pattern}/ (support question misrouted '
+              'into feedback)', not bad, '; '.join(t[:70] for t in bad))
+
+    # Per-message ask counts: the calibration core. 'contains' must appear in
+    # the first 200 chars of the source message (original_message is capped)
+    for spec in expect.get('message_asks', []):
+        marker = spec['contains'].lower()
+        rows = [r for r in all_rows
+                if marker in (r.get('original_message') or '').lower()]
+        check(f"message '{spec['contains']}' -> {spec['asks']} ask(s)",
+              len(rows) == spec['asks'],
+              f"got {len(rows)}: " + ('; '.join(t[:60] for t in texts(rows))
+                                      or 'NONE — silently dropped?'))
+
+    for pattern in expect.get('support_must_match', []):
+        check(f'support contains /{pattern}/', any_match(pattern, support),
+              'no support question matches — dropped or misrouted')
+    for pattern in expect.get('must_not_match', []):
+        bad = [t for t in texts(all_rows) if re.search(pattern, t, re.IGNORECASE)]
+        check(f'no ask matches /{pattern}/ (verb drift)', not bad,
+              '; '.join(t[:70] for t in bad))
+
+    # False-merge twins: no group may contain a member matching A and
+    # another member matching B
+    for a, b in expect.get('must_not_group', []):
+        rx_a, rx_b = re.compile(a, re.IGNORECASE), re.compile(b, re.IGNORECASE)
+        merged = [g for g in groups
+                  if any(rx_a.search(t) for t in texts(g['questions']))
+                  and any(rx_b.search(t) for t in texts(g['questions']))]
+        check(f'/{a}/ and /{b}/ not merged', not merged,
+              '; '.join(g['representative_question'][:70] for g in merged))
+
+    # A repair firing means a count-without-rows leaked to the exit
+    # invariant — defensive code saved the render, but the leak is a bug
+    repairs = (results.get('metadata', {}).get('llm_stats', {})
+               or {}).get('integrity_repairs', 0)
+    check('no render-integrity repairs needed', not repairs,
+          f'{repairs} repair(s) — an upstream stage leaked an unprovable count')
+
+    failed = [c for c in checks if not c['ok']]
+    return {'type': 'transcript', 'checks': checks, 'failed': len(failed),
+            'passed': len(checks) - len(failed), 'results': results}
+
+
+def format_transcript_report(result: Dict) -> str:
+    """Human-readable transcript-fixture report for the console."""
+    lines = []
+    for c in result['checks']:
+        mark = 'PASS' if c['ok'] else 'FAIL'
+        lines.append(f"  [{mark}] {c['name']}")
+        if not c['ok'] and c['detail']:
+            lines.append(f"         {c['detail']}")
+    lines.append(f"\n{result['passed']}/{len(result['checks'])} checks passed"
+                 + ('' if not result['failed'] else
+                    f" — {result['failed']} FAILED"))
     return '\n'.join(lines)

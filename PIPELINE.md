@@ -308,18 +308,32 @@ Respond with JSON only: {"verdict": "answered"}, {"verdict": "unanswered"}, or {
 
 ---
 
-## Regression fixture & evaluation
+## Regression fixtures & evaluation
 
-`fixtures/field_run_2026-06-10.json` freezes the real 2026-06-10 run (17
-questions) with correct buckets and groupings. After ANY prompt, anchor, or
-threshold change, run:
+After ANY prompt, anchor, or threshold change, run:
 
     slack-analyzer eval
 
-It reports routing accuracy and grouping precision/recall against the
-labels, listing every mismatch, missed pair, and wrong pair (exit code 1 on
-any miss). The topic bank is excluded so the score measures taxonomy +
-clustering + prompts, not learned history.
+With no arguments it runs EVERY fixture in `fixtures/` and exits 1 on any
+miss. Two fixture types:
+
+- **Question-level** (`field_run_2026-06-10.json`): frozen questions with
+  correct buckets and groupings. Scores routing accuracy and grouping
+  precision/recall, listing every mismatch, missed pair, wrong pair, and
+  integrity violation.
+- **Transcript-level** (`mft_synthetic_1.json`, `mft_synthetic_2.json`,
+  `"type": "transcript"`): a raw transcript plus an answer key. Runs the
+  FULL pipeline — extraction included — and asserts the key's headline
+  numbers: total asks, per-message ask counts (collapse traps vs split
+  controls), the one true recurrence, exact feedback membership, verb-drift
+  bans, false-merge twins, and zero integrity repairs. Extraction bugs
+  (silent drops, over-splitting, verb drift, feedback misrouting) happen
+  before routing, so only this type can see them. The human-readable trap
+  maps live next to them (`mft_test_answer_key*.md`).
+
+The topic bank is excluded from both types (transcript runs get a temp
+empty bank) so the score measures the pipeline, not one machine's learned
+history.
 
 `metadata.llm_stats` tracks abstain/verdict rates per run (verify
 true/false/uncertain, audit evictions, extract empty batches, label
