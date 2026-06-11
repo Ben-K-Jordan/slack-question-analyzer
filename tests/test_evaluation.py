@@ -374,3 +374,8 @@ def test_evaluate_transcript_occurrence_integrity_always_on(tmp_path):
     twins[1]['text'] = twins[0]['text']
     result = evaluate_transcript(_StubAnalyzer(results), fixture)
     assert result['failed'] == 0, format_transcript_report(result)
+
+
+def test_shipped_mft_fixture_7_markers_resolve():
+    _markers_resolve('fixtures/mft_test_transcript_7.txt',
+                     'fixtures/mft_synthetic_7.json')

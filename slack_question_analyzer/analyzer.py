@@ -423,6 +423,14 @@ class QuestionAnalyzer:
             source = q.get('original_message') or ''
             toks = tokens(q)
             text = (q.get('text') or '').strip()
+            if source and self._ENUMERATED_ASKS_RE.search(source):
+                # Enumerated-split siblings are locked separate: the asker
+                # declared them distinct, and that outranks any overlap or
+                # marker heuristic (identical-text dups were already removed
+                # at extraction)
+                by_message.setdefault(source, [])
+                kept.append(q)
+                continue
             marked = bool(self._RESTATE_MARKER_RE.match(text)) or (
                 bool(self._DEICTIC_LEAD_RE.match(text))
                 and toks <= self._META_QUESTION_WORDS)
@@ -488,7 +496,8 @@ class QuestionAnalyzer:
         r"would (really )?(love|like)(?! to (know|understand|ask))"
         r"|would be (great|nice|helpful)|would help"
         r"|\bwish (the|we|it|there)\b|please add|any plans to|love it if"
-        r"|wants? to be able to|doesn'?t exist today|isn'?t possible today",
+        r"|wants? to be able to|doesn'?t exist today|isn'?t possible today"
+        r"|(doesn'?t|does not) (look|seem|appear)( to be)? possible",
         re.IGNORECASE)
     _FEEDBACK_LABEL_RE = re.compile(
         r'\b(feature requests?|product feedback|enhancement requests?'
@@ -616,6 +625,14 @@ class QuestionAnalyzer:
         drop = set()
         for source, indices in by_message.items():
             if len(indices) < 2 or calls >= cap or not source:
+                continue
+            # PRECEDENCE RULE: a message that EXPLICITLY enumerates separate
+            # asks ('1. ... 2. ...', 'and separately', 'two things') had its
+            # split decided at extraction, on the asker's own words — the
+            # split decision outranks every collapse decision, always.
+            # Consolidation once deleted 'max retry count' as a 'rephrasing'
+            # of its enumerated sibling 'custom transfer label'.
+            if self._ENUMERATED_ASKS_RE.search(source):
                 continue
             calls += 1
             keep = self.labeler.consolidate_same_ask(
@@ -931,25 +948,50 @@ class QuestionAnalyzer:
                              verifier, auditor, known_topics,
                              report) -> List[Dict]:
         """
-        The category funnel, taxonomy-first:
+        The category funnel — MEANING FIRST, CATEGORY SECOND:
 
-        1. Route every question to its nearest bucket anchor (pure embedding
-           math). Top-2 anchors too close -> the LLM adjudicates a closed
-           single-number choice. Near no anchor -> kept, flagged for review.
-        2. Cluster WITHIN each bucket at a fixed relaxed bar (the corpus
-           there is coherent by construction, so the adaptive noise gate
-           must stay out of the way). Bank claims and the LLM audit still
-           apply inside each bucket.
+        1. Cluster ALL questions globally by meaning (lexical dedup, bank
+           claims, average-link at a fixed bar, borderline verify, pair-only
+           rescue, two-judge audit — the full machinery, applied once).
+        2. Route each resulting CLUSTER to a bucket by its representative.
+           Top-2 anchors too close -> the LLM adjudicates a closed choice.
+           Near no anchor, or LLM abstains -> the WHOLE cluster is held for
+           review.
         3. Each bucket's fixed 'category' becomes the group's theme — the
            final merge map is deterministic code, not a model.
+
+        Why this order (field finding, fixture 7): grouping used to live
+        INSIDE buckets, downstream of routing — so identical asks that
+        routed to different buckets could never merge. A 4x recurrence
+        caught 3 (the fourth routed elsewhere), a 2x never fired (its halves
+        landed in two buckets), and an emerging topic could not surface as a
+        cluster because routing scattered it first. Recurrence is a fact
+        about MEANING; the bucket is presentation. Bonus: an unroutable
+        CLUSTER abstains as a unit — a multi-question review pile is the
+        'a category is missing' radar, which per-question routing made
+        structurally invisible.
         """
         sa = self.similarity_analyzer
+        if sa.threshold_pinned:
+            bar = sa.similarity_threshold
+        else:
+            bar = float(os.getenv('IN_BUCKET_THRESHOLD', '0.8'))
+
+        logger.info("Grouping %d question(s) globally at bar %.2f "
+                    "(meaning first, category second)...", len(questions), bar)
+        groups = sa.group_similar_questions(
+            questions,
+            progress_callback=(lambda done, total: report('embedding', done, total)),
+            verifier=verifier, auditor=auditor,
+            known_topics=known_topics, fixed_threshold=bar)
+
+        # Route each cluster by its representative question
         anchor_embeddings = sa.get_embeddings_batch(taxonomy.anchor_texts())
-        question_embeddings = sa.get_embeddings_batch(
-            [q['normalized_text'] for q in questions],
-            progress_callback=(lambda done, total: report('embedding', done, total)))
+        rep_embeddings = sa.get_embeddings_batch(
+            [self.extractor.normalize_question(g['representative_question'])
+             for g in groups])
         assignments, ambiguous, outliers = route_questions(
-            question_embeddings, anchor_embeddings)
+            rep_embeddings, anchor_embeddings)
 
         # LLM adjudication for the genuinely ambiguous routes (closed choice)
         adjudicate = (self.labeler.choose_bucket
@@ -957,77 +999,69 @@ class QuestionAnalyzer:
                       and self._llm_enabled(self._verify_mode) else None)
         cap = int(os.getenv('ROUTE_LLM_MAX', '20'))
         adjudicated = 0
-        for qi, candidate_indices in ambiguous:
+        for gi, candidate_indices in ambiguous:
             choice = None
             if adjudicate and adjudicated < cap:
                 adjudicated += 1
                 candidates = [{'id': taxonomy.buckets[k]['id'],
                                'name': taxonomy.bucket_name(k)}
                               for k in candidate_indices]
-                chosen_id = adjudicate(questions[qi]['text'], candidates)
+                chosen_id = adjudicate(groups[gi]['representative_question'],
+                                       candidates)
                 if chosen_id == 0:
                     # The model abstained (fits both/neither): quarantine —
                     # a pooling review pile beats scattered wrong guesses,
                     # and a growing pile means a category is missing
-                    outliers.append(qi)
+                    outliers.append(gi)
                     continue
                 if chosen_id is not None:
                     choice = next((k for k in candidate_indices
                                    if taxonomy.buckets[k]['id'] == chosen_id), None)
             # Fallback: the embedding favorite (first candidate)
-            assignments[qi] = choice if choice is not None else candidate_indices[0]
+            assignments[gi] = choice if choice is not None else candidate_indices[0]
 
+        review_questions = sum(groups[gi]['count'] for gi in outliers)
         self._last_routing = {
             'taxonomy_version': taxonomy.version,
             'routed': len(assignments),
             'ambiguous': len(ambiguous),
             'llm_adjudicated': adjudicated,
-            'needs_review': len(outliers),
+            'needs_review': review_questions,
         }
-        logger.info("Routed %d question(s) into buckets (%d ambiguous, %d "
-                    "AI-adjudicated); %d kept for review (no category fits)",
-                    len(assignments), len(ambiguous), adjudicated, len(outliers))
+        logger.info("Routed %d cluster(s) into buckets (%d ambiguous, %d "
+                    "AI-adjudicated); %d cluster(s) / %d question(s) kept "
+                    "for review (no category fits)",
+                    len(assignments), len(ambiguous), adjudicated,
+                    len(outliers), review_questions)
 
-        by_bucket: Dict[int, List[int]] = {}
-        for qi, b in assignments.items():
-            by_bucket.setdefault(b, []).append(qi)
-
-        # Inside a coherent bucket a relaxed FIXED bar is safe (a pinned
-        # user threshold still wins)
-        if sa.threshold_pinned:
-            in_bucket_bar = sa.similarity_threshold
-        else:
-            in_bucket_bar = float(os.getenv('IN_BUCKET_THRESHOLD', '0.8'))
-
-        groups: List[Dict] = []
-        for b in sorted(by_bucket):
-            bucket_questions = [questions[qi] for qi in by_bucket[b]]
-            logger.info("Bucket '%s': grouping %d question(s) at bar %.2f...",
-                        taxonomy.bucket_name(b), len(bucket_questions), in_bucket_bar)
-            bucket_groups = sa.group_similar_questions(
-                bucket_questions, verifier=verifier, auditor=auditor,
-                known_topics=known_topics, fixed_threshold=in_bucket_bar)
+        for gi, b in assignments.items():
+            group = groups[gi]
             category = taxonomy.final_category(b)
-            for group in bucket_groups:
-                group['bucket'] = taxonomy.bucket_name(b)
-                group['theme'] = category
-                for q in group['questions']:
-                    q['theme'] = category
-                    # Routing provenance on the row itself: survives the
-                    # group/ungrouped split, so exports and the eval can
-                    # check where any individual question landed
-                    q['bucket'] = taxonomy.bucket_name(b)
-            groups.extend(bucket_groups)
+            group['bucket'] = taxonomy.bucket_name(b)
+            group['theme'] = category
+            for q in group['questions']:
+                q['theme'] = category
+                # Routing provenance on the row itself: survives the
+                # group/ungrouped split, so exports and the eval can
+                # check where any individual question landed
+                q['bucket'] = taxonomy.bucket_name(b)
 
-        # Outliers are kept as unique questions, visibly flagged — a funnel
+        # Unroutable clusters are kept whole and visibly flagged — a funnel
         # that quarantines its own uncertainty beats one that forces every
-        # item into the closest wrong home
-        for qi in outliers:
-            q = dict(questions[qi])
-            q['needs_review'] = True
-            logger.info("Needs review (no category fits): %.80r", q['text'])
-            groups.append({'representative_question': q['text'],
-                           'questions': [q], 'count': 1, 'avg_similarity': 1.0})
+        # item into the closest wrong home. A MULTI-question review cluster
+        # is the emerging-category signal.
+        for gi in outliers:
+            group = groups[gi]
+            for q in group['questions']:
+                q['needs_review'] = True
+            if group['count'] > 1:
+                logger.info("EMERGING TOPIC? A coherent %d-question cluster "
+                            "fits no category: %.80r — consider adding a "
+                            "bucket for it", group['count'],
+                            group['representative_question'])
+            else:
+                logger.info("Needs review (no category fits): %.80r",
+                            group['representative_question'])
         return groups
 
     def _assign_themes(self, groups: List[Dict],
@@ -1203,6 +1237,34 @@ class QuestionAnalyzer:
         suggestion = round(stats['max'] - 0.02, 2)
         return suggestion if 0 < suggestion < threshold else None
 
+    @staticmethod
+    def _topic_grounded(topic: str, group: Dict) -> bool:
+        """Every content word of a topic label (stemmed, >3 chars) must
+        occur in the group's question text — labels describe, never invent."""
+        def stems(text):
+            out = set()
+            for t in re.findall(r'[a-z0-9]+', text.lower()):
+                if len(t) <= 3:
+                    continue
+                for suffix in ('ing', 'ed', 'es', 's'):
+                    if t.endswith(suffix) and len(t) - len(suffix) >= 3:
+                        t = t[:len(t) - len(suffix)]
+                        break
+                out.add(t)
+            return out
+
+        topic_stems = stems(topic)
+        if not topic_stems:
+            return False
+        member_stems = stems(' '.join(q.get('text') or ''
+                                      for q in group['questions']))
+        # Prefix-tolerant match: the crude suffix folding is asymmetric
+        # ('failures' -> 'failur' but 'failure' -> 'failure'), so a stem
+        # counts as present when either side is a prefix of the other
+        return all(any(t.startswith(m) or m.startswith(t)
+                       for m in member_stems)
+                   for t in topic_stems)
+
     def _label_groups(self, groups: List[Dict], report):
         """
         Give each group a 'topic' (and, when an LLM is available, a 'summary').
@@ -1246,6 +1308,16 @@ class QuestionAnalyzer:
                 sample = self._diverse_sample(group['questions'])
                 label = self.labeler.label_group([q['text'] for q in sample],
                                                  keywords=group.get('keywords'))
+                # Grounding invariant: every content word of the label must
+                # appear in the group's own question text. A group of
+                # failure-alert questions was once labeled 'Transfer
+                # Retries' — a name the members never said. Ungrounded
+                # labels fall back to keywords (which are extracted from
+                # the members by construction).
+                if label and not self._topic_grounded(label['topic'], group):
+                    logger.info("Discarded an ungrounded label (words not in "
+                                "the group's own questions): %r", label['topic'])
+                    label = None
                 if label:
                     group['topic'] = label['topic']
                     group['summary'] = label['summary']

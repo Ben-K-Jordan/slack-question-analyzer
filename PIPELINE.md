@@ -1,6 +1,24 @@
-# The Question Funnel — Pipeline Spec (v2.37, prompt pack 18, taxonomy v3)
+# The Question Funnel — Pipeline Spec (v2.38, prompt pack 18, taxonomy v3)
 
 > Deltas since the prompts/stages quoted below were written:
+> - Eval round 12 / fixture 7 (volume + ranking + emerging topic) — THE
+>   REORDER: grouping now runs GLOBALLY FIRST, and each resulting
+>   CLUSTER is routed to a bucket by its representative (Stage 1 and
+>   Stage 2 below have swapped). Grouping used to live inside buckets,
+>   downstream of routing, so identical asks that routed to different
+>   buckets could never merge: a 4x recurrence caught 3, a 2x never
+>   fired, and an emerging topic was scattered before its coherence
+>   could be seen. Recurrence is a fact about MEANING; the bucket is
+>   presentation. An unroutable CLUSTER now abstains as a unit — a
+>   multi-question review cluster is the 'a category is missing' radar.
+>   PRECEDENCE RULE: enumerated-split siblings ('1. ... 2. ...', 'and
+>   separately') are locked separate — the asker's own split outranks
+>   every collapse pass (consolidation once deleted 'max retry count'
+>   as a 'rephrasing' of its enumerated sibling). Topic labels must be
+>   GROUNDED: every content word of a label must occur in the group's
+>   own question text, else keyword fallback ('Transfer Retries' once
+>   named a group of failure-alert questions). Wish-phrasing gains
+>   "doesn't look/seem possible".
 > - Eval round 11 (181/184; fixtures 1, 2, 5, 6 ALL PERFECT; the
 >   single-ask cap killed the 5GB dup first try): the cap's survivor is
 >   now ranked against the '?'-SENTENCE (the lone question mark marks
