@@ -478,6 +478,14 @@ class SimilarityAnalyzer:
                 clusters = self._merge_borderline_clusters(clusters, similarity_matrix,
                                                            buckets, verifier)
 
+            # Rescue stranded singletons: a question numerically just under
+            # the bar may still belong to an existing group — the verifier
+            # decides. Surgical by design: nearest group ONLY, conservative
+            # verifier bias, abstain -> stays a singleton.
+            if verifier is not None:
+                clusters = self._rescue_singletons(clusters, similarity_matrix,
+                                                   buckets, verifier)
+
             # Final QC: the LLM audits every formed group (any size, however
             # it formed — embeddings OR a borderline merge) and evicts clear
             # outliers. Embeddings not trained on the domain score some
@@ -666,6 +674,49 @@ class SimilarityAnalyzer:
 
             clusters.append(group_indices)
 
+        return clusters
+
+    def _rescue_singletons(self, clusters: List[List[int]], similarity_matrix,
+                           buckets: List[List[Dict]], verifier) -> List[List[int]]:
+        """
+        A singleton near (but under) the bar is sometimes an under-grouped
+        member of an existing cluster and sometimes genuinely unique — the
+        two look identical numerically. The tell is whether the NEAREST
+        group passes the one-doc-page test, so each candidate singleton is
+        adjudicated by the verifier against its nearest group only:
+        - never looped against all groups (that would quietly dissolve the
+          uniques bucket — over-merge wearing a disguise)
+        - verifier keeps its conservative doubt-means-no bias
+        - abstain/failure -> stays a singleton
+        """
+        margin = float(os.getenv('LLM_RESCUE_MARGIN', '0.1'))
+        max_checks = int(os.getenv('LLM_RESCUE_MAX', '10'))
+        multi = [i for i, c in enumerate(clusters) if len(c) >= 2]
+        if not multi:
+            return clusters
+
+        checked = 0
+        absorbed = set()
+        for si, cluster in enumerate(clusters):
+            if len(cluster) != 1 or checked >= max_checks:
+                continue
+            s = cluster[0]
+            best_group, best_sim = None, -1.0
+            for gi in multi:
+                sim = max(similarity_matrix[s][j] for j in clusters[gi])
+                if sim > best_sim:
+                    best_group, best_sim = gi, sim
+            if best_sim < self.effective_threshold - margin:
+                continue  # genuinely far from everything: rare, not wrong
+            checked += 1
+            group_texts = [buckets[j][0]['text'] for j in clusters[best_group][:3]]
+            if verifier([buckets[s][0]['text']], group_texts) is True:
+                logger.info("AI rescued a stranded question into a group: %.80r",
+                            buckets[s][0]['text'])
+                clusters[best_group].append(s)
+                absorbed.add(si)
+        if absorbed:
+            return [c for i, c in enumerate(clusters) if i not in absorbed]
         return clusters
 
     def _audit_clusters(self, clusters: List[List[int]],

@@ -633,3 +633,76 @@ def test_known_topics_with_wrong_dimensions_are_ignored(monkeypatch):
                  question('a question about another thing?')]
     groups = analyzer.group_similar_questions(questions, known_topics=topics)
     assert len(groups) == 2  # no crash, no bogus claims
+
+
+def test_singleton_rescue_absorbs_undergrouped_member(monkeypatch):
+    """
+    Field regression: a third thread question sat just under the in-bucket
+    bar and was stranded in uniques. The rescue pass adjudicates it against
+    its NEAREST group only; the verifier's yes absorbs it.
+    """
+    analyzer = make_analyzer(monkeypatch, threshold='0.8')
+    # q0/q1 pair at 0.85; q2 at 0.75 to q0 (under bar, inside rescue margin)
+    fake = np.array([
+        [1.0, 0.0, 0.0],
+        [0.85, float(np.sqrt(1 - 0.85 ** 2)), 0.0],
+        [0.75, 0.0, float(np.sqrt(1 - 0.75 ** 2))],
+    ])
+    monkeypatch.setattr(analyzer, 'get_embeddings_batch',
+                        lambda texts, progress_callback=None: fake)
+    questions = [question('Any way to avoid running out of threads?'),
+                 question('Can the thread issue be fixed by scaling vertically?'),
+                 question('Any way around thread use with many scheduled actions?')]
+
+    asked = []
+
+    def verifier(a, b):
+        asked.append((tuple(a), tuple(b)))
+        return True
+
+    groups = analyzer.group_similar_questions(questions, verifier=verifier)
+    assert len(groups) == 1
+    assert groups[0]['count'] == 3
+    # Exactly one rescue adjudication, against the nearest group
+    rescue_calls = [c for c in asked if len(c[0]) == 1]
+    assert len(rescue_calls) == 1
+
+
+def test_singleton_rescue_abstain_stays_singleton(monkeypatch):
+    """Verifier no/uncertain -> the singleton stays a singleton (rare is
+    not wrong)."""
+    analyzer = make_analyzer(monkeypatch, threshold='0.8')
+    fake = np.array([
+        [1.0, 0.0, 0.0],
+        [0.85, float(np.sqrt(1 - 0.85 ** 2)), 0.0],
+        [0.75, 0.0, float(np.sqrt(1 - 0.75 ** 2))],
+    ])
+    monkeypatch.setattr(analyzer, 'get_embeddings_batch',
+                        lambda texts, progress_callback=None: fake)
+    questions = [question('Threads question one?'),
+                 question('Threads question two?'),
+                 question('A genuinely different ask?')]
+    for verdict in (False, None):
+        groups = analyzer.group_similar_questions(
+            questions, verifier=lambda a, b, v=verdict: v if len(a) == 1 else None)
+        assert sorted(g['count'] for g in groups) == [1, 2]
+
+
+def test_singleton_rescue_skips_far_singletons(monkeypatch):
+    """A singleton far from every group is rare, not wrong: no LLM call."""
+    analyzer = make_analyzer(monkeypatch, threshold='0.8')
+    fake = np.array([
+        [1.0, 0.0, 0.0],
+        [0.85, float(np.sqrt(1 - 0.85 ** 2)), 0.0],
+        [0.0, 0.0, 1.0],  # orthogonal: far outside the rescue margin
+    ])
+    monkeypatch.setattr(analyzer, 'get_embeddings_batch',
+                        lambda texts, progress_callback=None: fake)
+
+    def never_single(a, b):
+        assert len(a) != 1, 'far singleton must not reach the verifier'
+        return None
+
+    questions = [question('a?'), question('b?'), question('c?')]
+    groups = analyzer.group_similar_questions(questions, verifier=never_single)
+    assert sorted(g['count'] for g in groups) == [1, 2]
