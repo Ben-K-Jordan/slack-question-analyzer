@@ -263,7 +263,7 @@ def test_llm_labels_and_summary_applied(monkeypatch):
                                                        'summary': 'People ask how to reset passwords.'},
              verify_same_topic=lambda a, b: None,
              detect_questions=lambda texts: [],
-             summarize_analysis=lambda groups, total: 'Password resets dominate.')
+             summarize_analysis=lambda groups, total, themes=None: 'Password resets dominate.')
 
     results = analyzer.analyze_slack_content(SAMPLE_CONTENT)
     group = results['groups'][0]
@@ -290,7 +290,7 @@ def test_keyword_fallback_when_llm_fails(monkeypatch):
              label_group=lambda texts, keywords=None: None,
              verify_same_topic=lambda a, b: None,
              detect_questions=lambda texts: [],
-             summarize_analysis=lambda groups, total: None)
+             summarize_analysis=lambda groups, total, themes=None: None)
 
     results = analyzer.analyze_slack_content(SAMPLE_CONTENT)
     assert results['groups'][0]['topic']  # fell back to keywords, not missing
@@ -312,7 +312,7 @@ def test_llm_detection_adds_missed_questions(monkeypatch):
              label_group=lambda texts, keywords=None: None,
              verify_same_topic=lambda a, b: None,
              detect_questions=lambda texts: [{'index': 0, 'question': 'How do I fix webhook timeouts?'}],
-             summarize_analysis=lambda groups, total: None)
+             summarize_analysis=lambda groups, total, themes=None: None)
 
     results = analyzer.analyze_slack_content(content)
     assert results['total_questions'] == 2
@@ -336,7 +336,7 @@ def test_full_llm_extraction_mode(monkeypatch):
              extract_questions=lambda texts, thorough=False: [
                  {'index': 0, 'question': 'Does the Metering Agent come pre-installed?'}
              ] if 'pre-installed' in texts[0] else [],
-             summarize_analysis=lambda groups, total: None)
+             summarize_analysis=lambda groups, total, themes=None: None)
 
     results = analyzer.analyze_slack_content(content)
     assert results['total_questions'] == 1
@@ -352,7 +352,7 @@ def test_full_extraction_falls_back_to_regex_on_llm_failure(monkeypatch):
              label_group=lambda texts, keywords=None: None,
              verify_same_topic=lambda a, b: None,
              extract_questions=lambda texts, thorough=False: None,  # LLM call failed
-             summarize_analysis=lambda groups, total: None)
+             summarize_analysis=lambda groups, total, themes=None: None)
 
     results = analyzer.analyze_slack_content(SAMPLE_CONTENT)
     assert results['total_questions'] == 3  # regex fallback kept everything
@@ -368,7 +368,7 @@ def test_auto_mode_defaults_to_llm_extraction_for_small_transcripts(monkeypatch)
              verify_same_topic=lambda a, b: None,
              extract_questions=lambda texts, thorough=False: [
                  {'index': 0, 'question': 'Does the agent come pre-installed?'}],
-             summarize_analysis=lambda groups, total: None)
+             summarize_analysis=lambda groups, total, themes=None: None)
 
     results = analyzer.analyze_slack_content(
         "2024-01-05\nHi Team, can I check if the agent comes pre-installed?\n")
@@ -393,7 +393,7 @@ def test_answer_detection_counts_resolved_threads(monkeypatch):
              verify_same_topic=lambda a, b: None,
              detect_questions=lambda texts: [],
              is_answered=lambda question, replies: True,
-             summarize_analysis=lambda groups, total: None)
+             summarize_analysis=lambda groups, total, themes=None: None)
 
     results = analyzer.analyze_slack_content(content)
     assert results['answered_questions'] == 1
@@ -554,7 +554,7 @@ def test_safety_net_recovers_batch_the_fast_model_skipped(monkeypatch):
              label_group=lambda texts, keywords=None: None,
              verify_same_topic=lambda a, b: None,
              extract_questions=extract,
-             summarize_analysis=lambda groups, total: None)
+             summarize_analysis=lambda groups, total, themes=None: None)
 
     results = analyzer.analyze_slack_content(
         "2024-01-05\nHow do I configure IWHI monitoring?\n")
@@ -570,7 +570,7 @@ def test_safety_net_falls_back_to_regex_when_both_models_skip(monkeypatch):
              label_group=lambda texts, keywords=None: None,
              verify_same_topic=lambda a, b: None,
              extract_questions=lambda texts, thorough=False: [],
-             summarize_analysis=lambda groups, total: None)
+             summarize_analysis=lambda groups, total, themes=None: None)
 
     results = analyzer.analyze_slack_content(
         "2024-01-05\nHow do I configure IWHI monitoring?\n")
@@ -645,7 +645,7 @@ def test_safety_net_drops_duplicate_when_fast_model_misattributes(monkeypatch):
              label_group=lambda texts, keywords=None: None,
              verify_same_topic=lambda a, b: None,
              extract_questions=extract,
-             summarize_analysis=lambda groups, total: None)
+             summarize_analysis=lambda groups, total, themes=None: None)
 
     results = analyzer.analyze_slack_content(
         "2024-01-05\nHow do I configure IWHI monitoring?\n"

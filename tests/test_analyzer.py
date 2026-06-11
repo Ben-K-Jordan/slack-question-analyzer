@@ -152,3 +152,27 @@ def test_keywords_contrast_against_corpus(analyzer):
     assert keywords[0] == 'antivirus'
     assert 'just' not in keywords and 'needs' not in keywords
     assert keywords[1] != 'customer'  # corpus-wide word can't outrank specifics
+
+
+def test_same_message_rephrasings_collapse(analyzer):
+    """Field regression: the extractor rewrote ONE complaint from two angles
+    ('what is the error' / 'why does it fail'), inflating the question count.
+    Same message + moderate content-word overlap = one ask. Distinct
+    multi-questions from one message share few words and must survive."""
+    def q(text, source):
+        return {'text': text, 'normalized_text': text.lower(),
+                'original_message': source}
+
+    questions = [
+        q('What is the antivirus scanning error when copying to Target System?', 'm1'),
+        q('Why does the Copy Task to Target System fail due to an antivirus scanning error?', 'm1'),
+        q('Can we trigger transfers via REST instead of the scheduler?', 'm2'),
+        q('Is there a way to bulk-disable actions?', 'm2'),
+        # Same text as the m1 question but a DIFFERENT message: a real repeat
+        q('What is the antivirus scanning error when copying to Target System?', 'm3'),
+    ]
+    kept = analyzer._collapse_same_message_rephrasings(questions)
+    texts = [k['text'] for k in kept]
+    assert len(kept) == 4
+    assert 'Why does the Copy Task to Target System fail due to an antivirus scanning error?' not in texts
+    assert texts.count('What is the antivirus scanning error when copying to Target System?') == 2
