@@ -491,7 +491,8 @@ class SimilarityAnalyzer:
             # outliers. Embeddings not trained on the domain score some
             # unrelated pairs as high as true pairs; the audit is the decider.
             if auditor is not None:
-                clusters = self._audit_clusters(clusters, buckets, auditor)
+                clusters = self._audit_clusters(clusters, buckets, auditor,
+                                                verifier=verifier)
 
             groups = [self._build_group(indices, buckets, embeddings, similarity_matrix)
                       for indices in clusters]
@@ -722,7 +723,8 @@ class SimilarityAnalyzer:
         return clusters
 
     def _audit_clusters(self, clusters: List[List[int]],
-                        buckets: List[List[Dict]], auditor) -> List[List[int]]:
+                        buckets: List[List[Dict]], auditor,
+                        verifier=None) -> List[List[int]]:
         """
         Final LLM audit of every formed group: evict clear outliers.
 
@@ -732,6 +734,12 @@ class SimilarityAnalyzer:
         auditor's domain knowledge is the decider; on uncertainty (None or
         an empty list), the numeric grouping stands. Biggest groups are
         audited first (most damage if wrong).
+
+        Second field finding: a single model sample evicted a TRUE pair
+        ("limit concurrent transfers" / "cap transfers per node"). Eviction
+        is destructive, so it needs TWO judges: the auditor only nominates;
+        the verifier must independently confirm the nominee is a different
+        topic (explicit False). True/uncertain -> the nominee stays.
         """
         max_checks = int(os.getenv('LLM_VERIFY_MAX', '10'))
         checked = 0
@@ -742,10 +750,21 @@ class SimilarityAnalyzer:
                 texts = [buckets[idx][0]['text'] for idx in cluster]
                 outliers = auditor(texts)
                 if outliers:
-                    evicted = {cluster[i] for i in outliers}
-                    for idx in sorted(evicted):
+                    nominated = {cluster[i] for i in outliers}
+                    evicted = set()
+                    for idx in sorted(nominated):
+                        rest_texts = [buckets[j][0]['text']
+                                      for j in cluster if j not in nominated][:3]
+                        if verifier is not None and rest_texts:
+                            verdict = verifier([buckets[idx][0]['text']], rest_texts)
+                            if verdict is not False:
+                                logger.info("Audit eviction overruled by the "
+                                            "verifier (same topic): %.80r",
+                                            buckets[idx][0]['text'])
+                                continue
+                        evicted.add(idx)
                         logger.info("AI evicted an outlier from a group "
-                                    "(different topic): %.90r",
+                                    "(both judges agree: different topic): %.90r",
                                     buckets[idx][0]['text'])
                         audited.append([idx])
                     rest = [idx for idx in cluster if idx not in evicted]
