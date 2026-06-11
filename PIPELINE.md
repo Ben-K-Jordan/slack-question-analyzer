@@ -1,6 +1,17 @@
-# The Question Funnel — Pipeline Spec (v2.33, prompt pack 15, taxonomy v3)
+# The Question Funnel — Pipeline Spec (v2.34, prompt pack 16, taxonomy v3)
 
 > Deltas since the prompts/stages quoted below were written:
+> - Eval round 8 (first quality-extraction round; best yet): same-source
+>   rows inside a group are now dispositioned by whether the MESSAGE
+>   enumerates separate asks ('1. ... 2. ...', 'and separately', 'two
+>   unrelated questions'): enumerated -> eject to its own row (T6 class),
+>   not enumerated -> drop as a rephrase, with provenance. Deictic
+>   meta-questions ('Is that the right approach, or is there a cleaner
+>   pattern?') collapse as continuations of their message's other ask.
+>   Rhetorical filler gains the solidarity-banter pattern ('anyone else
+>   ready/excited/looking forward...'). CONSOLIDATE gains the
+>   context-symptom restatement example; ROUTE gains an off-topic
+>   worked example.
 > - Eval round 7: small transcripts (<= EXTRACT_QUALITY_MAX, default 30
 >   messages) hand PRIMARY extraction to the quality model — extraction
 >   is the hardest open-ended job and seven rounds of 3B wobble say so.

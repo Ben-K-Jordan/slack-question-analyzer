@@ -281,15 +281,35 @@ def test_same_source_rephrases_never_count_as_recurrence(analyzer):
     assert phantom['count'] == 1        # not a 2x recurrence anymore
     assert genuine['count'] == 2        # identical-text repeats untouched
     assert cross_message['count'] == 2  # genuine recurrence untouched
-    # The extra row survives as its own singleton, in the same bucket —
-    # no question vanishes from the page
-    assert len(groups) == 4
-    ejected = groups[3]
-    assert ejected['count'] == 1
-    assert ejected['questions'][0]['text'] == 'What is the right way to handle encoding?'
-    assert ejected['bucket'] == 'File Handling'
-    # Total rows are conserved: 6 in, 6 out
-    assert sum(g['count'] for g in groups) == 6
+    # The m4 message claims no separate asks (no enumeration), so its
+    # same-cluster second row is a rephrase: DROPPED with provenance
+    assert len(groups) == 3
+    assert any(d['text'] == 'What is the right way to handle encoding?'
+               for d in analyzer._dropped)
+
+
+def test_same_source_distinct_asks_eject_when_message_enumerates(analyzer):
+    """The T6 class: a 'two things: 1. ... 2. ...' message's asks wrongly
+    clustered together must EJECT (both stay on the page), because the
+    message itself claims separate asks."""
+    source = ('Two things for the setup: 1. Can we set per-folder retention '
+              'policies? 2. Can we auto-purge files older than N days?')
+    group = {'count': 2, 'bucket': 'Install, Upgrade & Admin', 'questions': [
+        {'text': 'Can we set per-folder retention policies?',
+         'normalized_text': 'can we set per-folder retention policies?',
+         'original_message': source},
+        {'text': 'Can we auto-purge files older than N days?',
+         'normalized_text': 'can we auto-purge files older than n days?',
+         'original_message': source},
+    ]}
+    groups = [group]
+    analyzer._collapse_same_source_occurrences(groups)
+    assert group['count'] == 1
+    assert len(groups) == 2             # ejected singleton appended
+    assert groups[1]['count'] == 1
+    assert 'auto-purge' in groups[1]['questions'][0]['text']
+    assert groups[1]['bucket'] == 'Install, Upgrade & Admin'
+    assert sum(g['count'] for g in groups) == 2  # nothing lost
 
 def test_render_integrity_repairs_unprovable_groups(analyzer):
     """Exit invariant: a group may only render a count it can prove with
@@ -348,16 +368,17 @@ def test_total_questions_derived_from_rendered_rows(monkeypatch):
 
     # One message, two low-overlap rephrases (lexical collapse can't see
     # them, no LLM consolidation with labels off) -> they cluster -> the
-    # exit invariant breaks up the same-source pair: NOT a 2x recurrence
-    # (one message = one asking) but both rows stay on the page as
-    # singletons, and the total tile must equal exactly those rows
+    # exit invariant sees same source + same cluster + a message that
+    # claims no separate asks: the rephrase is dropped (with provenance)
+    # and the total tile equals exactly the rendered rows
     results = analyzer.analyze_slack_content(
         "2024-06-03\nHow can we normalize encoding during transfers? "
         "What is the right way to deal with wrong-coded files?\n")
     rendered = (sum(g['count'] for g in results['groups'])
                 + len(results['ungrouped_questions']))
-    assert results['total_questions'] == rendered == 2
+    assert results['total_questions'] == rendered == 1
     assert results['total_groups'] == 0  # no phantom 'asked 2x'
+    assert any('rephrase' in d['reason'] for d in results['dropped_questions'])
 
 
 def test_rephrase_collapse_folds_suffixes(analyzer):

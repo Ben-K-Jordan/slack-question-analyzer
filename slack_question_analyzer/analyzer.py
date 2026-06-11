@@ -336,6 +336,7 @@ class QuestionAnalyzer:
     _RHETORICAL_FILLER_RE = re.compile(
         r'^(?:has |have )?(?:anyone|anybody)(?: else)? (?:seen|hit|run into)'
         r'(?: this| that| it)?(?: before)?$'
+        r'|^(?:anyone|anybody) else (?:ready|excited|hyped|looking forward)\b.*$'
         r'|^any (?:thoughts|ideas|luck|advice)(?: on this| on that)?$'
         r'|^(?:right|thoughts|make sense|does that make sense|makes sense)$',
         re.IGNORECASE)
@@ -360,6 +361,18 @@ class QuestionAnalyzer:
     _RESTATE_MARKER_RE = re.compile(
         r'^(?:basically|i mean|in other words|that is|so basically'
         r'|put differently)\b', re.IGNORECASE)
+
+    # 'Is that the right approach, or is there a cleaner pattern?' — a
+    # question whose subject is pure deixis ('that'/'this') and whose
+    # content words are all META-vocabulary about asking (approach, way,
+    # pattern...) cannot stand alone: it is a continuation of the message's
+    # other ask, even with zero domain-word overlap
+    _DEICTIC_LEAD_RE = re.compile(r'^(?:is|would|does) (?:that|this)\b',
+                                  re.IGNORECASE)
+    _META_QUESTION_WORDS = frozenset({
+        'that', 'this', 'there', 'right', 'correct', 'best', 'better',
+        'clean', 'cleaner', 'approach', 'approaches', 'pattern', 'patterns',
+        'idea', 'ideas', 'sense', 'option', 'options', 'work', 'possible'})
 
     def _collapse_same_message_rephrasings(self, questions: List[Dict]) -> List[Dict]:
         """
@@ -408,7 +421,10 @@ class QuestionAnalyzer:
         for q in questions:
             source = q.get('original_message') or ''
             toks = tokens(q)
-            marked = bool(self._RESTATE_MARKER_RE.match((q.get('text') or '').strip()))
+            text = (q.get('text') or '').strip()
+            marked = bool(self._RESTATE_MARKER_RE.match(text)) or (
+                bool(self._DEICTIC_LEAD_RE.match(text))
+                and toks <= self._META_QUESTION_WORDS)
             match = None
             for seen in by_message.get(source, []):
                 # IDENTICAL text is a genuine repeat (someone asked the exact
@@ -746,6 +762,16 @@ class QuestionAnalyzer:
                 self.labeler._count('messages_without_questions', len(silent))
         return questions
 
+    # A message that EXPLICITLY enumerates separate asks ('1. ... 2. ...',
+    # 'two unrelated questions', 'and separately') may legitimately put two
+    # rows in one cluster; a message that doesn't enumerate cannot — its
+    # same-cluster second row is a rephrase. This is the deterministic line
+    # between the T6-class (eject: real distinct asks wrongly merged) and
+    # the rephrase class (drop: 'I mean...' variants the judges leaked).
+    _ENUMERATED_ASKS_RE = re.compile(
+        r'\b\d{1,2}[.)]\s|and,? separately|two (unrelated )?(questions|things)'
+        r'|couple of (questions|things)|second question', re.IGNORECASE)
+
     def _collapse_same_source_occurrences(self, groups: List[Dict]) -> None:
         """
         Enforce, after ALL grouping passes: within one group, one occurrence
@@ -755,14 +781,14 @@ class QuestionAnalyzer:
         whole class regardless of entry point. Cross-message occurrences
         (genuine repeats) are untouched.
 
-        The extra row is EJECTED to its own singleton group, not deleted:
-        by this stage the rephrase passes (lexical + two-judge consolidation)
-        have already run, so a different-text survivor from the same source
-        is at least as likely a DISTINCT ask the clusterer wrongly merged
-        (retention policy + auto-purge from one 'two things' message) as a
-        leaked rephrase. A wrong eject shows as one extra unique row; a
-        wrong delete is a silent drop — the worst bug class this project
-        has had.
+        Disposition of the extra row depends on the SOURCE MESSAGE:
+        - it explicitly enumerates separate asks -> EJECT to its own
+          singleton row (a distinct ask the clusterer wrongly merged, like
+          retention + auto-purge from a 'two things' message);
+        - no enumeration -> the same-cluster, same-source second row is a
+          rephrase that slipped every upstream pass: DROP it, recorded in
+          provenance. Same message + same topic cluster + no claim of
+          multiple asks = one asking.
         """
         ejected: List[Dict] = []
         for group in groups:
@@ -776,15 +802,22 @@ class QuestionAnalyzer:
                     # can't count as a second asking of THIS topic.
                     # (Identical text from an identical source stays
                     # countable — distinct short messages can share text.)
-                    logger.info("Ejected a same-source occurrence into its "
-                                "own row (one message = one asking per "
-                                "topic): %.80r", q['text'])
-                    single = {'representative_question': q['text'],
-                              'questions': [q], 'count': 1,
-                              'avg_similarity': 1.0}
-                    if group.get('bucket'):
-                        single['bucket'] = group['bucket']
-                    ejected.append(single)
+                    if self._ENUMERATED_ASKS_RE.search(source):
+                        logger.info("Ejected a same-source occurrence into "
+                                    "its own row (the message enumerates "
+                                    "separate asks): %.80r", q['text'])
+                        single = {'representative_question': q['text'],
+                                  'questions': [q], 'count': 1,
+                                  'avg_similarity': 1.0}
+                        if group.get('bucket'):
+                            single['bucket'] = group['bucket']
+                        ejected.append(single)
+                    else:
+                        logger.info("Dropped a same-source rephrase inside "
+                                    "a group (message claims no separate "
+                                    "asks): %.80r", q['text'])
+                        self._record_drop(q, 'same-source rephrase in a '
+                                             'group (no enumerated asks)')
                     continue
                 if source:
                     first_norm.setdefault(source, norm)
