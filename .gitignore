@@ -12,5 +12,4 @@ analyses/
 jobs/
 topic_bank.json
 
-# Made with Bob
 *.egg-info/

@@ -8,5 +8,3 @@ from .analyzer import QuestionAnalyzer
 
 __version__ = "2.32.0"
 __all__ = ["QuestionExtractor", "SimilarityAnalyzer", "QuestionAnalyzer"]
-
-# Made with Bob
