@@ -1,6 +1,14 @@
-# The Question Funnel — Pipeline Spec (v2.35, prompt pack 17, taxonomy v3)
+# The Question Funnel — Pipeline Spec (v2.36, prompt pack 17, taxonomy v3)
 
 > Deltas since the prompts/stages quoted below were written:
+> - Eval round 10 (179/184; fixtures 1, 2, 5 PERFECT; host-key exactly
+>   3x - the rescue cap worked): the single-ask cap - an UNENUMERATED
+>   message containing at most one '?' asks at most one question; a
+>   second distinct extraction is the model rewriting context into an
+>   extra ask. Best-supported phrasing survives; identical-text repeats
+>   and truncated sources are exempt. The virus-scan-vs-metering route
+>   is now a DOCUMENTED convention (taxonomy comment + fixture asserts
+>   the consistent route), per the answer key's sanctioned alternative.
 > - Eval round 9 (177/184; fixtures 2 and 5 PERFECT): rescue only
 >   completes under-grouped PAIRS (LLM_RESCUE_MAX_GROUP=2) — every
 >   mega-group across nine rounds grew by rescuing a singleton into an

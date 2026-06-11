@@ -159,6 +159,7 @@ class QuestionAnalyzer:
             questions = self.extractor.questions_from_messages(messages)
         questions = self._drop_rhetorical_filler(questions)
         questions = self._collapse_same_message_rephrasings(questions)
+        questions = self._enforce_single_ask_cap(questions)
         questions = self._enforce_date_integrity(questions)
         questions = self._consolidate_same_ask(questions)
 
@@ -528,6 +529,51 @@ class QuestionAnalyzer:
         if self.labeler is not None:
             self.labeler._count('extract_dropped_unsupported')
         return None
+
+    def _enforce_single_ask_cap(self, questions: List[Dict]) -> List[Dict]:
+        """
+        Invariant: an UNENUMERATED message containing at most one question
+        mark asks at most one question. Every genuine multi-ask message
+        signals itself — numbered lists, 'and separately', 'two things' —
+        or simply contains several '?'s; without any such signal, a second
+        extraction is the model rewriting the message's context into an
+        extra question ('Is there a max size?' + 'Can it handle very large
+        payloads?' from one sentence). Keep the best-supported phrasing,
+        drop the rest with provenance.
+
+        Only applies when original_message is untruncated (< its 200-char
+        cap): a clipped source can hide '?'s and enumeration markers.
+        """
+        by_source: Dict[str, List[Dict]] = {}
+        for q in questions:
+            by_source.setdefault(q.get('original_message') or '', []).append(q)
+
+        drop: set = set()
+        for source, qs in by_source.items():
+            if not source or len(source) >= 200:
+                continue
+            # Identical-text entries are genuine repeats (distinct short
+            # messages can share their whole text) — occurrence counting
+            # owns those. The cap only adjudicates DISTINCT rewrites.
+            if len({q['normalized_text'] for q in qs}) < 2:
+                continue
+            if source.count('?') > 1 or self._ENUMERATED_ASKS_RE.search(source):
+                continue
+
+            def rank(q):
+                support = self._source_support(q['normalized_text'], source)
+                return (support, len(q.get('text') or ''))
+
+            best_norm = max(qs, key=rank)['normalized_text']
+            for q in qs:
+                if q['normalized_text'] != best_norm:
+                    logger.info("Dropped an extra extraction (unenumerated "
+                                "single-'?' message asks one question): %.80r",
+                                q['text'])
+                    self._record_drop(q, "extra extraction (single-'?' "
+                                         'message, no enumerated asks)')
+                    drop.add(id(q))
+        return [q for q in questions if id(q) not in drop]
 
     def _consolidate_same_ask(self, questions: List[Dict]) -> List[Dict]:
         """
