@@ -1,4 +1,4 @@
-# The Question Funnel — Pipeline Spec (v2.27, prompt pack 10, taxonomy v3)
+# The Question Funnel — Pipeline Spec (v2.28, prompt pack 10, taxonomy v3)
 
 > Deltas since the prompts/stages quoted below were written:
 > - Eval round 2: same-source occurrences inside a group are EJECTED to
@@ -353,7 +353,7 @@ miss. Two fixture types:
   correct buckets and groupings. Scores routing accuracy and grouping
   precision/recall, listing every mismatch, missed pair, wrong pair, and
   integrity violation.
-- **Transcript-level** (`mft_synthetic_1..4.json`, `"type": "transcript"`):
+- **Transcript-level** (`mft_synthetic_1..6.json`, `"type": "transcript"`):
   a raw transcript plus an answer key. Runs the FULL pipeline — extraction
   included — and asserts the key's headline numbers: total asks,
   per-message ask counts (collapse traps vs split controls), named
@@ -367,7 +367,12 @@ miss. Two fixture types:
   maps live next to them (`mft_test_answer_key*.md`). Fixture themes:
   1 = trap map (drops, scaffolding, verb drift), 2 = calibration pairs +
   feedback gate, 3 = occurrence/recurrence integrity, 4 = threads +
-  Answered + tokenization stress.
+  Answered + tokenization stress, 5 = extraction PRECISION (a noisy
+  channel where 10 of 14 messages must yield ZERO asks — fabrication
+  guard), 6 = routing HUMILITY (off-topic / split / vague questions must
+  reach the review pile via review_must_match, while clear questions —
+  even ones quoting error strings — must route confidently via
+  routed_must_match).
 
 The topic bank is excluded from both types (transcript runs get a temp
 empty bank) so the score measures the pipeline, not one machine's learned
