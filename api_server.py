@@ -182,9 +182,16 @@ def _run_analysis_job(job_id, contents, provider, threshold):
             job['progress'] = {'stage': 'starting', 'completed': 0, 'total': 1}
             _persist_job(job_id)
 
+        def cancel_check():
+            with _jobs_lock:
+                job = _jobs.get(job_id)
+                if job and job['cancelled']:
+                    raise JobCancelled()
+
         try:
             analyzer = QuestionAnalyzer(provider=provider, threshold=threshold)
-            results = analyzer.analyze_contents(contents, progress_callback=on_progress)
+            results = analyzer.analyze_contents(contents, progress_callback=on_progress,
+                                                cancel_check=cancel_check)
             analysis_id = _save_analysis(results)
             _finish_job(job_id, status='done', result=results, analysis_id=analysis_id)
         except JobCancelled:

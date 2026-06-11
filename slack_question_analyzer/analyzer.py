@@ -108,7 +108,8 @@ class QuestionAnalyzer:
         """
         return self.analyze_contents([content], progress_callback=progress_callback)
 
-    def analyze_contents(self, contents: List[str], progress_callback=None) -> Dict:
+    def analyze_contents(self, contents: List[str], progress_callback=None,
+                         cancel_check=None) -> Dict:
         """
         Analyze one or more Slack content strings as a single corpus.
 
@@ -123,6 +124,9 @@ class QuestionAnalyzer:
         self._dropped = []  # provenance: every removed question, with reason
         if self.labeler is not None:
             self.labeler.stats = {}  # fresh abstain/verdict counters per run
+            # Cancel takes effect before each LLM call, not just at stage
+            # boundaries — a single call can run minutes on CPU hardware
+            self.labeler.cancel_check = cancel_check
         logger.info("Step 1: Extracting questions from %d file(s)...", len(contents))
         messages = []
         for content in contents:
