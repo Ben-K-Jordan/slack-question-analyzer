@@ -2,7 +2,7 @@
 function RankedRow({ rank, question, count, maxCount, keywords = [], movement = null,
   similarity = null, questions = null, index = 0, defaultOpen = false,
   topic = null, summary = null, seenIn = 0, onRenameTopic = null, aiConfirmed = false,
-  theme = null }) {
+  theme = null, answered = 0 }) {
   const [open, setOpen] = React.useState(defaultOpen);
   const [hover, setHover] = React.useState(false);
   const [shown, setShown] = React.useState(false);
@@ -76,7 +76,7 @@ function RankedRow({ rank, question, count, maxCount, keywords = [], movement = 
         <div style={{ maxHeight: open ? bodyH : 0, overflow: 'hidden', transition: 'max-height var(--duration-slow) var(--ease-productive)' }}>
           <div ref={bodyRef} style={{ padding: '0 20px 18px', marginLeft: movement != null ? 98 : 50 }}>
             {summary ? <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 10, fontStyle: 'italic' }}>{summary}</div> : null}
-            {similarity ? <div style={{ fontSize: 12, color: 'var(--text-helper)', marginBottom: 10 }}>Avg. similarity <b style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>{similarity}</b> · {questions.length} occurrences{aiConfirmed ? ' · match confirmed by AI' : ''}</div> : null}
+            {similarity ? <div style={{ fontSize: 12, color: 'var(--text-helper)', marginBottom: 10 }}>Avg. similarity <b style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>{similarity}</b> · {questions.length} occurrences{aiConfirmed ? ' · match confirmed by AI' : ''}{answered > 0 ? <span title="Occurrences whose thread replies actually answered the question" style={{ color: 'var(--green-60, #198038)' }}> · {answered} answered</span> : null}</div> : null}
             <ul style={{ listStyle: 'none', margin: 0, padding: 0, borderLeft: '1px solid var(--border-subtle)' }}>
               {questions.map((q, i) => (
                 <li key={i} style={{

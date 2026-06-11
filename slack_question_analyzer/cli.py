@@ -11,7 +11,7 @@ from .inputs import load_input_files
 
 
 @click.group()
-@click.version_option(version='2.34.0')
+@click.version_option(version='2.34.1')
 @click.option('--verbose', '-v', is_flag=True, help='Show debug-level logs')
 def cli(verbose):
     """
