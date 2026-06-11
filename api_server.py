@@ -676,16 +676,7 @@ def latest_weekly():
     summaries = _list_analyses()
     if not summaries:
         return jsonify({'success': False, 'error': 'No saved analyses yet'}), 404
-    return _weekly_response(summaries[0]['id'])
-
-
-@app.route('/api/analyses/<analysis_id>/weekly', methods=['GET'])
-def analysis_weekly(analysis_id):
-    """Week-in-Review stats for a specific saved analysis."""
-    return _weekly_response(analysis_id)
-
-
-def _weekly_response(analysis_id):
+    analysis_id = summaries[0]['id']
     data = _load_analysis(analysis_id)
     if data is None:
         return jsonify({'success': False, 'error': 'Analysis not found'}), 404

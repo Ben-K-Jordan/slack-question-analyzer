@@ -419,7 +419,7 @@ def test_health_validates_azure_and_openai_keys(client, monkeypatch):
 
 def test_weekly_stats_endpoint(client, fake_engine):
     job_id = client.post('/api/analyze', json={'content': SAMPLE_CONTENT}).get_json()['job_id']
-    finished = wait_for_job(client, job_id)
+    wait_for_job(client, job_id)
 
     latest = client.get('/api/analyses/latest/weekly')
     assert latest.status_code == 200
@@ -427,10 +427,6 @@ def test_weekly_stats_endpoint(client, fake_engine):
     # All three sample questions fall inside the week ending 2024-01-09
     assert weekly['totalThisWeek'] == 3
     assert weekly['groups'][0]['count'] == 2
-
-    by_id = client.get(f"/api/analyses/{finished['analysis_id']}/weekly")
-    assert by_id.status_code == 200
-    assert by_id.get_json()['data']['totalThisWeek'] == 3
 
 
 def test_weekly_stats_404s(client):
