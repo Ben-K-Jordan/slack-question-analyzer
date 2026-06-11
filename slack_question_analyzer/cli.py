@@ -11,7 +11,7 @@ from .inputs import load_input_files
 
 
 @click.group()
-@click.version_option(version='2.11.0')
+@click.version_option(version='2.12.0')
 @click.option('--verbose', '-v', is_flag=True, help='Show debug-level logs')
 def cli(verbose):
     """
@@ -270,6 +270,34 @@ def doctor():
                    f"'slack-analyzer doctor'.")
         sys.exit(1)
     click.echo("All good! Start the app with: python api_server.py")
+
+
+@cli.command(name='eval')
+@click.argument('fixture_file', type=click.Path(exists=True),
+                default='fixtures/field_run_2026-06-10.json', required=False)
+@click.option('--provider', '-p', type=click.Choice(['ollama', 'azure', 'openai']),
+              help='AI provider to use (default: from .env or ollama)')
+def eval_fixture(fixture_file, provider):
+    """
+    Score the pipeline against a labeled regression fixture.
+
+    Run this after EVERY prompt, anchor, or threshold change — it reports
+    routing accuracy and grouping precision/recall against frozen ground
+    truth, so tuning is measurable instead of guessed.
+    """
+    from .evaluation import load_fixture, evaluate, format_report
+
+    try:
+        fixture = load_fixture(fixture_file)
+        click.echo(f"Evaluating {fixture_file} ...")
+        analyzer = QuestionAnalyzer(provider=provider, use_disk_cache=True)
+        result = evaluate(analyzer, fixture)
+        click.echo(format_report(result))
+        if result['routing_mismatches'] or result['missed_pairs'] or result['wrong_pairs']:
+            sys.exit(1)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(2)
 
 
 @cli.command()

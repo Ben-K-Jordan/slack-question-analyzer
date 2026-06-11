@@ -33,6 +33,12 @@ logger = logging.getLogger(__name__)
 MAX_QUESTIONS_IN_PROMPT = 8
 MAX_TOPIC_WORDS = 6
 
+# The second axis: WHAT KIND of question, independent of subject. A
+# feature request and a defect report about the same feature need
+# completely different handling.
+QUESTION_TYPES = {'how-to', 'troubleshooting', 'is-it-possible',
+                  'feature-request', 'defect-report'}
+
 # Topics made up entirely of these words are useless and get retried
 GENERIC_TOPIC_WORDS = {
     'general', 'misc', 'miscellaneous', 'various', 'questions', 'question',
@@ -97,6 +103,10 @@ DETECT_SCHEMA = {
                 'properties': {
                     'index': {'type': 'integer'},
                     'question': {'type': 'string'},
+                    'type': {'type': 'string',
+                             'enum': ['how-to', 'troubleshooting',
+                                      'is-it-possible', 'feature-request',
+                                      'defect-report']},
                 },
                 'required': ['index', 'question'],
             },
@@ -114,7 +124,7 @@ ANSWERED_SCHEMA = {
 
 # Prompt pack version: stamped into results metadata so drift is traceable
 # (the LLM cache keys on full prompt text, so bumps also invalidate caches)
-PROMPT_PACK_VERSION = 2
+PROMPT_PACK_VERSION = 3
 
 LABEL_SYSTEM = (
     "If the group is empty, malformed, or too mixed to share one honest "
@@ -318,10 +328,19 @@ EXTRACT_SYSTEM = (
     "- Preserve technical tokens exactly as written: error strings, API "
     "names, product names, version numbers, file names. Never normalize, "
     "paraphrase, or invent them.\n"
+    "- Preserve the asker's intent verb exactly. HANDLE/CATCH/RESOLVE an "
+    "error is NOT the same as BYPASS/DISABLE/IGNORE it. If you cannot tell "
+    "what outcome they want, describe the symptom — do not name a "
+    "resolution they didn't state.\n"
     "- Messages may be in any language: keep each question in its original "
     "language.\n"
+    "- Tag each question with its type: 'how-to' (how do I do X), "
+    "'troubleshooting' (something is broken or failing), 'is-it-possible' "
+    "(does the product support X), 'feature-request' (asking for a new "
+    "capability), 'defect-report' (reporting a bug).\n"
     "Respond with JSON only: {\"questions\": [{\"index\": <message number>, "
-    "\"question\": \"<standalone question>\"}]}. Use an empty list if none qualify."
+    "\"question\": \"<standalone question>\", \"type\": \"<type>\"}]}. "
+    "Use an empty list if none qualify."
 )
 
 EXTRACT_FEW_SHOT = """Example messages:
@@ -329,19 +348,24 @@ EXTRACT_FEW_SHOT = """Example messages:
 1. Deployed the fix to prod this morning, all green.
 2. Re: wM MFT (SaaS), customer product feedback. They would like to 1. See a graphical representation of the Action log showing status of each task. 2. Is there a way to group Actions and filter by group name? Any thoughts?
 3. Can we configure the following tasks to do this? 1. Find file001.txt in folder 2. Find file002.txt in folder 3. Invoke Flow Service to merge the files
+4. copy task is failing during the virus scan, please advise
 
 Correct answer: {"questions": [
-{"index": 0, "question": "Can we trigger transfers via REST instead of the scheduler?"},
-{"index": 0, "question": "Is there a way to bulk-disable actions?"},
-{"index": 2, "question": "Can the wM MFT (SaaS) Action log show a graphical representation of each task's status?"},
-{"index": 2, "question": "Can Actions in wM MFT (SaaS) be grouped and filtered by group name?"},
-{"index": 3, "question": "Can tasks be configured to find file001.txt and file002.txt in a folder and merge them with a Flow Service?"}]}
+{"index": 0, "question": "Can we trigger transfers via REST instead of the scheduler?", "type": "is-it-possible"},
+{"index": 0, "question": "Is there a way to bulk-disable actions?", "type": "is-it-possible"},
+{"index": 2, "question": "Can the wM MFT (SaaS) Action log show a graphical representation of each task's status?", "type": "feature-request"},
+{"index": 2, "question": "Can Actions in wM MFT (SaaS) be grouped and filtered by group name?", "type": "is-it-possible"},
+{"index": 3, "question": "Can tasks be configured to find file001.txt and file002.txt in a folder and merge them with a Flow Service?", "type": "is-it-possible"},
+{"index": 4, "question": "Why does a copy task fail during the antivirus scanning phase?", "type": "troubleshooting"}]}
 
 DO NOT answer message 2 like this: {"index": 2, "question": "They want to see the action log and group actions, any thoughts?"}
 Wrong because: 'Any thoughts?' is RHETORICAL and must be dropped; the two REAL questions must be split into two entries; 'they' must be made explicit using the CONTEXT sentence.
 
 DO NOT answer message 3 with three entries ("Find file001.txt in folder", "Find file002.txt in folder", "Invoke Flow Service to merge the files").
 Wrong because: those are steps of ONE workflow — the only ask is whether the workflow can be configured.
+
+DO NOT answer message 4 like this: {"index": 4, "question": "How do I bypass antivirus scanning errors?"}
+Wrong because: the asker never said bypass — they reported a failure and want it explained or fixed. Describe the symptom; never name a resolution they didn't state.
 
 Now extract from these messages."""
 
@@ -407,6 +431,14 @@ class GroupLabeler:
         # Optional domain hint injected into every prompt: knowing the product
         # makes small models dramatically more specific
         self.domain_context = os.getenv('DOMAIN_CONTEXT', '').strip()
+
+        # Abstain/verdict counters: the early-warning system. A spiking
+        # verify-false or extract-empty rate means an upstream stage is
+        # under-forming and a downstream pass is papering over it.
+        self.stats: Dict[str, int] = {}
+
+    def _count(self, key: str, n: int = 1):
+        self.stats[key] = self.stats.get(key, 0) + n
 
     def _system(self, base: str) -> str:
         """System prompt with the optional domain context appended."""
@@ -634,6 +666,7 @@ class GroupLabeler:
 
         topic = str(data['topic']).strip()
         if topic.upper() == 'NEEDS_REVIEW':
+            self._count('label_needs_review')
             return None  # abstained: callers fall back, nothing gets banked
         topic_words = topic.split()
         if len(topic_words) > MAX_TOPIC_WORDS:
@@ -650,7 +683,9 @@ class GroupLabeler:
         )
         data = self._generate_json(self._system(VERIFY_SYSTEM), user, VERIFY_SCHEMA, max_tokens=60)
         if data is None or not isinstance(data.get('same_topic'), bool):
+            self._count('verify_uncertain')
             return None
+        self._count('verify_true' if data['same_topic'] else 'verify_false')
         return data['same_topic']
 
     def audit_group(self, questions: List[str]) -> Optional[List[int]]:
@@ -667,12 +702,16 @@ class GroupLabeler:
         data = self._generate_json(self._system(AUDIT_SYSTEM), user, AUDIT_SCHEMA,
                                    max_tokens=60)
         if data is None or not isinstance(data.get('outliers'), list):
+            self._count('audit_uncertain')
             return None
         outliers = [int(i) - 1 for i in data['outliers']
                     if isinstance(i, int) and 1 <= i <= len(sample)]
         # "Everything is an outlier" is not a meaningful audit verdict
         if len(outliers) >= len(sample):
+            self._count('audit_uncertain')
             return None
+        self._count('audit_clean' if not outliers else 'audit_evictions',
+                    1 if not outliers else len(outliers))
         return outliers
 
     def choose_bucket(self, question: str,
@@ -774,7 +813,11 @@ class GroupLabeler:
         data = self._generate_json(system, user, DETECT_SCHEMA,
                                    max_tokens=800, model=model or self.fast_model)
         if data is None or not isinstance(data.get('questions'), list):
+            self._count('extract_failed_batches')
             return None
+        self._count('extract_batches')
+        if not data['questions']:
+            self._count('extract_empty_batches')
 
         found = []
         for item in data['questions']:
@@ -783,7 +826,10 @@ class GroupLabeler:
             index = item.get('index')
             question = str(item.get('question', '')).strip()
             if isinstance(index, int) and 0 <= index < len(message_texts) and question:
-                found.append({'index': index, 'question': question})
+                entry = {'index': index, 'question': question}
+                if item.get('type') in QUESTION_TYPES:
+                    entry['type'] = item['type']
+                found.append(entry)
         return found
 
     def is_answered(self, question: str, replies: List[str]) -> Optional[bool]:

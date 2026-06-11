@@ -1,4 +1,4 @@
-# The Question Funnel — Pipeline Spec (v2.11.0, prompt pack 2, taxonomy v1)
+# The Question Funnel — Pipeline Spec (v2.12.0, prompt pack 3, taxonomy v2)
 
 How a Slack transcript becomes ranked topics. Design rule throughout: **the
 language model is never asked to do the hard open-ended thing.** Embeddings
@@ -22,8 +22,11 @@ free and prompt edits self-invalidate the cache.
 1. Transcript parsed into messages (Slack JSON with threads, dashed-separator
    text, or CSV). Markup, code blocks, mentions stripped.
 2. **LLM-first extraction** (transcripts ≤ 150 messages; batches of 8):
-   the fast model classifies each sentence REAL / RHETORICAL / CONTEXT and
-   rewrites every REAL ask as a standalone question (prompt: EXTRACT, below).
+   the fast model classifies each sentence REAL / RHETORICAL / CONTEXT,
+   rewrites every REAL ask as a standalone question, preserves the asker's
+   intent verb (HANDLE ≠ BYPASS), and tags each question with its TYPE —
+   the second axis, independent of subject: how-to / troubleshooting /
+   is-it-possible / feature-request / defect-report (prompt: EXTRACT, below).
 3. Safety nets, in order:
    - a failed LLM batch falls back to regex extraction (questions never lost);
    - any message the fast model skipped that regex flags as a question gets a
@@ -38,10 +41,13 @@ free and prompt edits self-invalidate the cache.
 
 ## Stage 1 — Route into buckets (embeddings + closed-choice LLM)
 
-`taxonomy.json` defines 8 buckets, each with an `anchor` paragraph (the
-vocabulary that bucket should attract) and a fixed `category` (the merge
-map). **The anchors are the single biggest routing lever — they're what the
-embeddings actually match against.**
+`taxonomy.json` (v2) defines 8 buckets, each with an `anchor` paragraph and
+a fixed `category` (the merge map). **The anchors are the single biggest
+routing lever — they're what the embeddings actually match against — and as
+of v2 they are written in ASKERS' language (symptoms, goals, the messy way
+people describe problems: "the file just sits there"), not documentation
+language.** Convention encoded in v2: anything about the Action log lives in
+File Handling.
 
 - Every question and every anchor is embedded (`nomic-embed-text`, with the
   `clustering:` task prefix). Each question goes to its nearest anchor.
@@ -75,11 +81,16 @@ Per bucket, in order:
    within `LLM_VERIFY_MARGIN=0.03` of the bar are judged by the quality
    model (prompt: VERIFY; conservative, doubt → false; numeric guard: the
    merged cluster's average must stay ≥ bar − margin; cap `LLM_VERIFY_MAX=10`).
-5. **Group audit (final QC)**: every formed group of any size is checked by
+5. **Singleton rescue**: a singleton within `LLM_RESCUE_MARGIN=0.1` of an
+   existing group is adjudicated by the verifier against its NEAREST group
+   only (never looped against all groups — that would dissolve the uniques
+   bucket). Doubt/failure → stays a singleton. Rare ≠ wrong: singletons far
+   from every group never reach the LLM. Cap `LLM_RESCUE_MAX=10`.
+6. **Group audit (final QC)**: every formed group of any size is checked by
    the quality model (prompt: AUDIT; suspicious of outliers but doubt →
    keep); flagged questions are evicted back to uniques. Biggest groups
    first; cap `LLM_VERIFY_MAX=10`.
-6. Representative question = the member closest to the group centroid
+7. Representative question = the member closest to the group centroid
    (extractive, never generated). Keywords = group word frequency × inverse
    frequency in the REST of the corpus (corpus-wide words score zero).
 
@@ -118,6 +129,8 @@ Per bucket, in order:
 | `ROUTE_LLM_MAX` | 20 | adjudication call cap per run |
 | `LLM_VERIFY_MARGIN` | 0.03 | borderline-merge window below the bar |
 | `LLM_VERIFY_MAX` | 10 | verify cap and audit cap |
+| `LLM_RESCUE_MARGIN` | 0.1 | singleton-rescue candidacy window below the bar |
+| `LLM_RESCUE_MAX` | 10 | rescue adjudication cap per bucket |
 | `LEXICAL_DEDUP_THRESHOLD` | 0.9 | token-Jaccard for counting rewordings as repeats |
 | `SAME_MESSAGE_REPHRASE_OVERLAP` | 0.5 | collapse bar for two rewrites of one ask |
 | `OLLAMA_GENERATION_MODEL` / `OLLAMA_FAST_MODEL` | auto | quality / typing models |
@@ -278,7 +291,26 @@ Respond with JSON only: {"verdict": "answered"}, {"verdict": "unanswered"}, or {
 
 ---
 
-## Known weak spots (observed in the v2.11.0 run, 2026-06-10 transcript)
+## Regression fixture & evaluation
+
+`fixtures/field_run_2026-06-10.json` freezes the real 2026-06-10 run (17
+questions) with correct buckets and groupings. After ANY prompt, anchor, or
+threshold change, run:
+
+    slack-analyzer eval
+
+It reports routing accuracy and grouping precision/recall against the
+labels, listing every mismatch, missed pair, and wrong pair (exit code 1 on
+any miss). The topic bank is excluded so the score measures taxonomy +
+clustering + prompts, not learned history.
+
+`metadata.llm_stats` tracks abstain/verdict rates per run (verify
+true/false/uncertain, audit evictions, extract empty batches, label
+abstains). If the rescue pass makes verify fire constantly, in-bucket
+clustering is under-forming upstream — that's the real problem, not a
+fuller-looking output.
+
+## Known weak spots (observed in the v2.11.0 run, 2026-06-10 transcript — addressed in v2.12.0, kept for history)
 
 1. **Under-grouping inside buckets.** Three thread-usage questions existed;
    only two grouped ("Thread Scaling" 2×, avg 72%, verifier-approved). The

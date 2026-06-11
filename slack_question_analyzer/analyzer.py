@@ -114,6 +114,8 @@ class QuestionAnalyzer:
                 progress_callback(stage, completed, total)
 
         report('extracting')
+        if self.labeler is not None:
+            self.labeler.stats = {}  # fresh abstain/verdict counters per run
         logger.info("Step 1: Extracting questions from %d file(s)...", len(contents))
         messages = []
         for content in contents:
@@ -300,7 +302,8 @@ class QuestionAnalyzer:
             if hits is not None:  # [] is a real answer: "no questions here"
                 for hit in hits:
                     text, message = batch[hit['index']]
-                    questions.append(self._llm_question(hit['question'], text, message))
+                    questions.append(self._llm_question(hit['question'], text,
+                                                        message, hit.get('type')))
             else:
                 # LLM failed for this batch: regex keeps us from losing questions
                 questions.extend(self.extractor.questions_from_messages(
@@ -342,7 +345,8 @@ class QuestionAnalyzer:
                 recovered = {hit['index'] for hit in (hits or [])}
                 for hit in hits or []:
                     text, message = batch[hit['index']]
-                    add_unless_duplicate(self._llm_question(hit['question'], text, message))
+                    add_unless_duplicate(self._llm_question(hit['question'], text,
+                                                            message, hit.get('type')))
                 for q in self.extractor.questions_from_messages(
                         [m for i, (_, m) in enumerate(batch) if i not in recovered]):
                     add_unless_duplicate(q)
@@ -490,7 +494,7 @@ class QuestionAnalyzer:
                 for name, count in sorted(counts.items(), key=lambda x: -x[1])]
 
     def _llm_question(self, raw_question: str, original_text: str,
-                      message: Dict) -> Dict:
+                      message: Dict, qtype: Optional[str] = None) -> Dict:
         """Build a question dict from an LLM-extracted/rewritten question."""
         cleaned = self.extractor.strip_greeting(raw_question)
         question = {
@@ -500,6 +504,8 @@ class QuestionAnalyzer:
             'original_message': original_text[:200],
             'llm_extracted': True,
         }
+        if qtype:
+            question['qtype'] = qtype
         if message.get('replies'):
             question['replies'] = message['replies']
         return question
@@ -582,6 +588,9 @@ class QuestionAnalyzer:
             # Routing health (taxonomy runs): rising 'needs_review' over time
             # means the taxonomy is drifting out of sync with real traffic
             'routing': self._last_routing,
+            # Abstain/verdict rates: if the rescue pass makes verify fire
+            # constantly, in-bucket clustering is under-forming upstream
+            'llm_stats': dict(self.labeler.stats) if self.labeler else None,
             'prompt_pack': PROMPT_PACK_VERSION,
         }
 
