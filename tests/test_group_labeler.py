@@ -189,11 +189,15 @@ def test_detect_questions_filters_invalid_indices(monkeypatch):
 
 
 def test_is_answered(monkeypatch):
-    patch_chat(monkeypatch, ['{"answered": true}'])
+    patch_chat(monkeypatch, ['{"verdict": "answered"}'])
     assert GroupLabeler('ollama').is_answered('How do I reset?', ['Go to settings > reset.']) is True
 
-    patch_chat(monkeypatch, ['{"answered": false}'])
+    patch_chat(monkeypatch, ['{"verdict": "unanswered"}'])
     assert GroupLabeler('ollama').is_answered('How do I reset?', ['Let me check.']) is False
+
+    # 'unknown' is the model's honest abstain — treated as no verdict
+    patch_chat(monkeypatch, ['{"verdict": "unknown"}'])
+    assert GroupLabeler('ollama').is_answered('How do I reset?', ['hmm?']) is None
 
 
 def test_available_checks_model_is_pulled(monkeypatch):
@@ -649,3 +653,18 @@ def test_safety_net_drops_duplicate_when_fast_model_misattributes(monkeypatch):
         "2024-01-06\nDeploy went fine, all green here.\n")
     assert results['total_questions'] == 1  # not a phantom 2x group
     assert results['total_groups'] == 0
+
+
+# ---- Prompt-pack v2 abstain paths ----
+
+def test_label_group_abstains_with_needs_review(monkeypatch):
+    """A mixed group gets NEEDS_REVIEW, not a vague papered-over label."""
+    patch_chat(monkeypatch, ['{"topic": "NEEDS_REVIEW", "summary": ""}'])
+    assert GroupLabeler('ollama').label_group(
+        ['Metering counts?', 'SFTP keys?', 'UI crash?']) is None
+
+
+def test_summary_abstains_with_needs_review(monkeypatch):
+    patch_chat(monkeypatch, ['{"summary": "NEEDS_REVIEW"}'])
+    groups = [{'topic': 'A', 'count': 2, 'representative_question': 'x'}]
+    assert GroupLabeler('ollama').summarize_analysis(groups, 5) is None
