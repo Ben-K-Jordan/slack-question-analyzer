@@ -26,7 +26,7 @@
       {"match": "algorithm negotiation", "bucket": "Connectivity"},
       {"match": "sftp connection to a new|new trading partner", "bucket": "Connectivity|Install"},
       {"match": "pgp", "bucket": "."},
-      {"match": "archived or deleted", "bucket": "."}
+      {"match": "archived or deleted|original (file|get)|file get(s)? (archived|deleted)|when a (scheduled )?transfer moves", "bucket": "."}
     ]
   }
 }

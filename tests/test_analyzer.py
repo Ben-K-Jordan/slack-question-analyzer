@@ -375,3 +375,54 @@ def test_rephrase_collapse_folds_suffixes(analyzer):
     ]
     kept = analyzer._collapse_same_message_rephrasings(questions)
     assert len(kept) == 1
+
+
+def test_content_free_rhetorical_filler_dropped(analyzer):
+    """'Anyone seen this before?' is built from pronouns alone — nothing to
+    answer in any context. The models keep leaking these (the two-judge
+    consolidation once PROTECTED one), so the extraction prompt's own
+    rhetorical list is enforced in code, with provenance."""
+    def q(text):
+        return {'text': text, 'normalized_text': text.lower(),
+                'original_message': 'm1', 'date': 'June 8, 2026'}
+
+    questions = [
+        q('Could the scheduler be running on the wrong timezone?'),
+        q('Anyone seen this before?'),
+        q('Any thoughts?'),
+        # Content-bearing 'anyone' questions are REAL and survive
+        q('Does anyone know if the wiki is down?'),
+        q('Has anyone seen 403 errors after the upgrade?'),
+    ]
+    kept = analyzer._drop_rhetorical_filler(questions)
+    texts = [k['text'] for k in kept]
+    assert 'Anyone seen this before?' not in texts
+    assert 'Any thoughts?' not in texts
+    assert 'Does anyone know if the wiki is down?' in texts
+    assert 'Has anyone seen 403 errors after the upgrade?' in texts
+    assert len(kept) == 3
+    dropped = [d['text'] for d in analyzer._dropped]
+    assert 'Anyone seen this before?' in dropped
+
+
+def test_restatement_marker_collapses_zero_overlap_rephrase(analyzer):
+    """'I mean is there a built-in way to gzip the payload?' shares no
+    content words with 'Can we compress files before sending?' — but the
+    leading marker IS the same-ask evidence, said by the asker themselves."""
+    def q(text):
+        return {'text': text, 'normalized_text': text.lower(),
+                'original_message': 'm6'}
+
+    questions = [
+        q('Can we compress files before sending?'),
+        q('I mean is there a built-in way to gzip or zip the payload prior to transfer?'),
+    ]
+    kept = analyzer._collapse_same_message_rephrasings(questions)
+    assert len(kept) == 1
+
+    # The marker only binds within ONE message: across messages it's inert
+    cross = [q('Can we compress files before sending?'),
+             {'text': 'Basically can transfers resume after an interruption?',
+              'normalized_text': 'basically can transfers resume after an interruption?',
+              'original_message': 'OTHER'}]
+    assert len(analyzer._collapse_same_message_rephrasings(cross)) == 2

@@ -58,7 +58,8 @@ class QuestionExtractor:
 
     # Leading greetings carry no meaning and clutter the dashboard
     _GREETING = re.compile(
-        r'^(?:(?:hi|hello|hey|greetings|good\s+(?:morning|afternoon|evening))'
+        r'^(?:(?:hi|hello|hey|greetings|good\s+(?:morning|afternoon|evening)'
+        r'|morning|quick\s+(?:one|question)|one\s+more\s+(?:thing|question))'
         r'(?:\s+(?:team|all|everyone|folks|guys|there))?[\s,!.:-]+)+',
         re.IGNORECASE)
 
@@ -107,9 +108,14 @@ class QuestionExtractor:
         questions = []
         for sentence in sentences:
             sentence = sentence.replace(self._DOT_SENTINEL, '.').strip()
-            if self.is_question(sentence):
+            # Strip the greeting BEFORE the question test: 'Quick one - does
+            # X support TLS' hides its question word behind the opener, and
+            # an unrecognized question here blinds the under-extraction
+            # safety net (the counts matched while the QUESTIONS differed)
+            candidate = self.strip_greeting(sentence)
+            if self.is_question(candidate):
                 # Drop trailing '.'/'!' but keep '?'
-                questions.append(self.strip_greeting(sentence.rstrip('.!').strip()))
+                questions.append(candidate.rstrip('.!').strip())
 
         return questions
 
