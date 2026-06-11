@@ -188,3 +188,17 @@ def test_heading_lines_are_not_message_content():
 def test_reply_only_block_produces_no_message():
     extractor = QuestionExtractor()
     assert extractor.extract_messages('> just a stray quoted line\n') == []
+
+
+def test_and_separately_splits_compound_questions():
+    """'and separately' explicitly joins two DISTINCT asks in one sentence;
+    the splitter must surface both so the under-extraction safety net can
+    count them (the Kafka half of such a sentence vanished silently in two
+    field rounds)."""
+    extractor = QuestionExtractor()
+    questions = extractor.extract_questions(
+        'Does MFT support mutual TLS for HTTPS partner endpoints, and '
+        'separately, can it post a transfer-complete event to Kafka?')
+    assert len(questions) == 2
+    assert any('mutual TLS' in q for q in questions)
+    assert any('Kafka' in q for q in questions)
