@@ -11,7 +11,7 @@ from .inputs import load_input_files
 
 
 @click.group()
-@click.version_option(version='2.23.0')
+@click.version_option(version='2.24.0')
 @click.option('--verbose', '-v', is_flag=True, help='Show debug-level logs')
 def cli(verbose):
     """
@@ -273,31 +273,52 @@ def doctor():
 
 
 @cli.command(name='eval')
-@click.argument('fixture_file', type=click.Path(exists=True),
-                default='fixtures/field_run_2026-06-10.json', required=False)
+@click.argument('fixture_files', type=click.Path(exists=True), nargs=-1)
 @click.option('--provider', '-p', type=click.Choice(['ollama', 'azure', 'openai']),
               help='AI provider to use (default: from .env or ollama)')
-def eval_fixture(fixture_file, provider):
+def eval_fixture(fixture_files, provider):
     """
-    Score the pipeline against a labeled regression fixture.
+    Score the pipeline against labeled regression fixtures.
 
-    Run this after EVERY prompt, anchor, or threshold change — it reports
-    routing accuracy and grouping precision/recall against frozen ground
-    truth, so tuning is measurable instead of guessed.
+    With no arguments, runs EVERY fixture in fixtures/. Run after each
+    prompt, anchor, or threshold change — question fixtures score routing
+    and grouping; transcript fixtures run the full pipeline end-to-end
+    (extraction included) against an answer key. Measurable, not guessed.
     """
-    from .evaluation import load_fixture, evaluate, format_report
+    from .evaluation import (load_fixture, evaluate, format_report,
+                             evaluate_transcript, format_transcript_report)
 
-    try:
-        fixture = load_fixture(fixture_file)
-        click.echo(f"Evaluating {fixture_file} ...")
-        analyzer = QuestionAnalyzer(provider=provider, use_disk_cache=True)
-        result = evaluate(analyzer, fixture)
-        click.echo(format_report(result))
-        if result['routing_mismatches'] or result['missed_pairs'] or result['wrong_pairs']:
-            sys.exit(1)
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(2)
+    if not fixture_files:
+        fixture_files = sorted(str(p) for p in Path('fixtures').glob('*.json'))
+        if not fixture_files:
+            click.echo('No fixtures found in fixtures/', err=True)
+            sys.exit(2)
+
+    analyzer = QuestionAnalyzer(provider=provider, use_disk_cache=True)
+    any_failed = False
+    for i, fixture_file in enumerate(fixture_files):
+        if i:
+            click.echo('')
+        try:
+            fixture = load_fixture(fixture_file)
+            click.echo(f"=== Evaluating {fixture_file} ===")
+            if fixture.get('type') == 'transcript':
+                result = evaluate_transcript(analyzer, fixture)
+                click.echo(format_transcript_report(result))
+                if result['failed']:
+                    any_failed = True
+            else:
+                result = evaluate(analyzer, fixture)
+                click.echo(format_report(result))
+                if (result['routing_mismatches'] or result['missed_pairs']
+                        or result['wrong_pairs']
+                        or result.get('integrity_violations')):
+                    any_failed = True
+        except Exception as e:
+            click.echo(f"Error: {e}", err=True)
+            sys.exit(2)
+    if any_failed:
+        sys.exit(1)
 
 
 @cli.command()
