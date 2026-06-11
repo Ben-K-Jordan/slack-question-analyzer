@@ -278,7 +278,7 @@ date,message
 
 ## LLM Features
 
-When a generation model is available, the pipeline uses it for five optional passes.
+When a generation model is available, the pipeline uses it for a set of optional passes — extraction, verification/auditing, labeling, answer detection, and summaries.
 The default chat model is sized to your machine: `llama3.1:8b` (better topic names
 and verification) on machines with 12GB+ RAM, `llama3.2` (3B, ~2GB) on smaller ones.
 If only the small model is downloaded, the app quietly uses it. When both are

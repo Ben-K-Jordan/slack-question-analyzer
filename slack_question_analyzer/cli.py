@@ -11,7 +11,7 @@ from .inputs import load_input_files
 
 
 @click.group()
-@click.version_option(version='2.40.0')
+@click.version_option(version='2.40.1')
 @click.option('--verbose', '-v', is_flag=True, help='Show debug-level logs')
 def cli(verbose):
     """
@@ -207,7 +207,9 @@ def doctor():
           'Install Python 3.10 or newer from https://python.org')
 
     try:
-        import numpy, sklearn, flask  # noqa: F401
+        import numpy   # noqa: F401  (import probe: is the dependency present?)
+        import sklearn  # noqa: F401
+        import flask    # noqa: F401
         check(True, 'Python dependencies installed')
     except ImportError as e:
         check(False, f'Python dependencies ({e.name} missing)',

@@ -8,11 +8,17 @@ All generation goes through one chat-based core with:
 - semantic validation with one corrective retry
 
 Capabilities (all optional — the pipeline works without any of them):
-- label_group:        topic name + one-sentence summary per question group
-- verify_same_topic:  yes/no check for borderline group merges
-- summarize_analysis: executive summary of the whole analysis
-- detect_questions:   find help requests the regex extractor missed
-- is_answered:        decide whether thread replies resolved a question
+- extract_questions:      LLM-first question extraction & standalone rewriting
+- detect_questions:       find help requests the regex extractor missed
+- consolidate_same_ask:   within-message restatement consolidation (two-judge)
+- confirm_feature_request: support-vs-feedback second opinion
+- verify_same_topic:      yes/no check for borderline group merges
+- audit_group:            evict members that don't belong (two-judge)
+- choose_bucket:          closed-choice routing adjudication (0 = abstain)
+- label_group:            topic name + one-sentence summary per group
+- assign_themes:          roll topics up into broad dashboard themes
+- summarize_analysis:     executive summary of the whole analysis
+- is_answered:            decide whether thread replies resolved a question
 """
 
 import os

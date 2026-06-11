@@ -1,13 +1,20 @@
 """
-Regression evaluation against a labeled fixture.
+Regression evaluation against labeled fixtures.
 
-A fixture freezes one real run's questions with their CORRECT buckets and
-groupings. Re-running it after every prompt, anchor, or threshold change
-turns "seems better" into "measurably better" — without it, every tuning
-change is a guess that may fix this run while silently breaking the last.
+Two fixture types, both run by `slack-analyzer eval`:
+- question-level: frozen questions with their CORRECT buckets/groupings;
+  scores routing accuracy and grouping precision/recall
+- transcript-level ("type": "transcript"): a raw transcript plus an answer
+  key; runs the FULL pipeline (extraction included) and asserts headline
+  numbers — counts, recurrence sizes, feedback membership, abstentions,
+  noise rejection, occurrence integrity
+
+Re-running after every prompt, anchor, or threshold change turns "seems
+better" into "measurably better" — without it, every tuning change is a
+guess that may fix this run while silently breaking the last.
 
 The topic bank is excluded on purpose: bank state differs per machine, and
-the fixture measures taxonomy + clustering + prompts, not learned history.
+the fixtures measure the pipeline, not learned history.
 """
 
 import json
