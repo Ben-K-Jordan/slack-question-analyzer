@@ -13,7 +13,7 @@ function App() {
   React.useEffect(() => {
     if (!window.QA_API) return;
     window.QA_API.getConfig()
-      .then((c) => setBackendVersion(c.version || null))
+      .then((c) => { setBackendVersion(c.version || null); window.QA_BACKEND_VERSION = c.version || null; })
       .catch(() => setBackendVersion(null));
   }, []);
 

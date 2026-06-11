@@ -21,6 +21,11 @@ from .exporters import to_csv, to_markdown
 
 logger = logging.getLogger(__name__)
 
+
+def _app_version() -> str:
+    from slack_question_analyzer import __version__  # lazy: avoids circular import
+    return __version__
+
 # Caps keep the optional LLM passes fast on huge transcripts
 MAX_LABELED_GROUPS = 20
 MAX_DETECTED_MESSAGES = 40
@@ -895,6 +900,10 @@ class QuestionAnalyzer:
     def _metadata(self) -> Dict:
         return {
             'analyzed_at': datetime.now(timezone.utc).isoformat(),
+            # The app version that PRODUCED these results — the dashboard
+            # warns when it differs from the running backend, ending the
+            # "nothing changed" confusion when an old saved analysis loads
+            'app_version': _app_version(),
             'similarity_threshold': self.similarity_analyzer.similarity_threshold,
             'model': self.similarity_analyzer.embedding_model,
             'provider': self.similarity_analyzer.provider,
