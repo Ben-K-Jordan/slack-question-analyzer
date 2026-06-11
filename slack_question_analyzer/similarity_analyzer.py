@@ -702,7 +702,13 @@ class SimilarityAnalyzer:
         """
         margin = float(os.getenv('LLM_RESCUE_MARGIN', '0.1'))
         max_checks = int(os.getenv('LLM_RESCUE_MAX', '10'))
-        multi = [i for i, c in enumerate(clusters) if len(c) >= 2]
+        # Rescue completes under-grouped PAIRS (the field case it was built
+        # for: a third thread question stranded just under the bar). An
+        # ESTABLISHED 3+ group that didn't catch the singleton during
+        # clustering is itself evidence the singleton differs — rescuing
+        # into those is how every mega-group across nine eval rounds grew
+        max_target = int(os.getenv('LLM_RESCUE_MAX_GROUP', '2'))
+        multi = [i for i, c in enumerate(clusters) if 2 <= len(c) <= max_target]
         rescued = set()
         if not multi:
             return clusters, rescued

@@ -6,5 +6,5 @@ from .question_extractor import QuestionExtractor
 from .similarity_analyzer import SimilarityAnalyzer
 from .analyzer import QuestionAnalyzer
 
-__version__ = "2.34.1"
+__version__ = "2.35.0"
 __all__ = ["QuestionExtractor", "SimilarityAnalyzer", "QuestionAnalyzer"]

@@ -850,3 +850,36 @@ def test_audit_undoes_a_flagged_rescue_without_verifier_overrule(monkeypatch):
     assert counts == [1, 2]  # rescue undone: tie reverts, no mega-group
     singleton = next(g for g in groups if g['count'] == 1)
     assert 'rotate the SSH keys' in singleton['representative_question']
+
+
+def test_rescue_only_completes_pairs_never_grows_established_groups(monkeypatch):
+    """Nine eval rounds of mega-groups grew the same way: a singleton
+    rescued into an already-formed 3+ group. Rescue exists to complete an
+    under-grouped PAIR; a 3+ group that didn't catch the singleton during
+    clustering is evidence the singleton differs."""
+    analyzer = make_analyzer(monkeypatch, threshold='0.8')
+    # q0/q1/q2: an established trio; q3 sits in the rescue band near them
+    fake = np.array([
+        [1.0, 0.0, 0.0],
+        [0.9, float(np.sqrt(1 - 0.9 ** 2)), 0.0],
+        [0.9, -float(np.sqrt(1 - 0.9 ** 2)), 0.0],
+        [0.72, 0.167, float(np.sqrt(1 - 0.72 ** 2 - 0.167 ** 2))],
+    ])
+    monkeypatch.setattr(analyzer, 'get_embeddings_batch',
+                        lambda texts, progress_callback=None: fake)
+    questions = [question('Enforce host key verification?'),
+                 question('Verify the partner host key first?'),
+                 question('Require host key checking on outbound?'),
+                 question('How do I rotate the SSH keys for partners?')]
+
+    rescue_calls = []
+
+    def verifier(a, b):
+        if len(a) == 1:
+            rescue_calls.append(a)
+        return True  # merge-happy: would approve anything asked
+
+    groups = analyzer.group_similar_questions(questions, verifier=verifier)
+    counts = sorted(g['count'] for g in groups)
+    assert counts == [1, 3]      # singleton NOT absorbed into the trio
+    assert rescue_calls == []    # the rescue never even consulted the LLM

@@ -160,6 +160,9 @@ CONSOLIDATE_SYSTEM = (
     "large uploads time out before finishing? The second restates the "
     "first's SYMPTOM from the message's context — one answer (raise the "
     "timeout) resolves both: {\"keep\": [1]}\n"
+    "Example: 1. Is there a maximum attachment size? 2. Can the system "
+    "handle very large attachments? The same ask from both directions — "
+    "one answer (the size limit) resolves both: {\"keep\": [1]}\n"
     "Example: 1. Can we trigger transfers via REST? 2. Is there a way to "
     "bulk-disable actions? Different asks: {\"keep\": [1, 2]}\n\n"
     "Respond with JSON only: {\"keep\": [<numbers>]}"
@@ -196,7 +199,7 @@ FEEDBACK_SYSTEM = (
 
 # Prompt pack version: stamped into results metadata so drift is traceable
 # (the LLM cache keys on full prompt text, so bumps also invalidate caches)
-PROMPT_PACK_VERSION = 16
+PROMPT_PACK_VERSION = 17
 
 LABEL_SYSTEM = (
     "If the group is empty, malformed, or too mixed to share one honest "
