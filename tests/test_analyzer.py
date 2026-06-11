@@ -176,3 +176,4 @@ def test_same_message_rephrasings_collapse(analyzer):
     assert len(kept) == 4
     assert 'Why does the Copy Task to Target System fail due to an antivirus scanning error?' not in texts
     assert texts.count('What is the antivirus scanning error when copying to Target System?') == 2
+

@@ -79,4 +79,14 @@ def to_markdown(results: Dict) -> str:
             lines.append(f"- {q['text']} _({q.get('date', 'Unknown')})_")
         lines.append('')
 
+    feedback = results.get('feature_requests', [])
+    if feedback:
+        lines.append(f"## Product Feedback ({len(feedback)})")
+        lines.append('')
+        lines.append('Feature requests routed out of the support funnel:')
+        lines.append('')
+        for q in feedback:
+            lines.append(f"- {q['text']} _({q.get('date', 'Unknown')})_")
+        lines.append('')
+
     return '\n'.join(lines)

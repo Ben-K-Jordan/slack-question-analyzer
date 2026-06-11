@@ -668,3 +668,37 @@ def test_summary_abstains_with_needs_review(monkeypatch):
     patch_chat(monkeypatch, ['{"summary": "NEEDS_REVIEW"}'])
     groups = [{'topic': 'A', 'count': 2, 'representative_question': 'x'}]
     assert GroupLabeler('ollama').summarize_analysis(groups, 5) is None
+
+
+def test_feature_requests_leave_the_support_funnel(monkeypatch):
+    """Questions typed feature-request are diverted to results['feature_requests']
+    and excluded from grouping, uniques, and total_questions."""
+    monkeypatch.setenv('LLM_EXTRACTION', 'full')
+    vectors = {'how do i reset my password?': [1.0, 0.0]}
+    analyzer = make_analyzer(monkeypatch, vectors=vectors, label_groups=True)
+
+    def extract(texts, thorough=False):
+        out = []
+        for i, t in enumerate(texts):
+            if 'reset' in t:
+                out.append({'index': i, 'question': 'How do I reset my password?',
+                            'type': 'how-to'})
+            if 'graphical' in t:
+                out.append({'index': i, 'question': 'Can the Action log get a graphical view?',
+                            'type': 'feature-request'})
+        return out
+
+    stub_llm(monkeypatch, analyzer,
+             label_group=lambda texts, keywords=None: None,
+             verify_same_topic=lambda a, b: None,
+             extract_questions=extract,
+             summarize_analysis=lambda groups, total, themes=None: None)
+
+    results = analyzer.analyze_slack_content(
+        "2024-01-05\nHow do I reset my password?\n"
+        "-----------------------------------------------------------\n"
+        "2024-01-06\nIt would be great to have a graphical Action log view\n")
+    assert results['total_questions'] == 1  # support questions only
+    assert len(results['feature_requests']) == 1
+    assert 'graphical' in results['feature_requests'][0]['text']
+    assert all('graphical' not in q['text'] for q in results['ungrouped_questions'])
