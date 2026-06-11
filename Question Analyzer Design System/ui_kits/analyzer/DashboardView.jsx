@@ -292,6 +292,17 @@ function DashboardView({ onUpload }) {
 
       {setupBanner}
 
+      {d.extractionAlerts ? (
+        <Reveal delay={102}>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: '14px 24px', background: '#fcf4d6', borderLeft: '3px solid #f1c21b', marginBottom: 32 }}>
+            <span style={{ color: '#8a6116', flex: '0 0 auto', marginTop: 1 }}><Icon name="triangle-alert" size={16} /></span>
+            <span style={{ fontSize: 13.5, color: '#5c4a0a', lineHeight: 1.55 }}>
+              <b>Extraction notes:</b> {d.extractionAlerts.join(' · ')}. Each one is named in the server console — if a question you expected is missing, that is where it went.
+            </span>
+          </div>
+        </Reveal>
+      ) : null}
+
       {d.autoAdjusted ? (
         <Reveal delay={105}>
           <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: '14px 24px', background: '#fff', border: '1px solid var(--border-subtle)', borderLeft: '3px solid var(--teal-60)', marginBottom: 32 }}>
@@ -452,6 +463,16 @@ function transformAnalysisResults(results) {
     topTheme: (results.themes && results.themes[0]) ? results.themes[0].name : null,
     featureRequests: results.feature_requests || [],
     threadsPresent: !!results.threads_present,
+    // Extraction anomalies must be LOUD: silent drops were the worst bug class
+    extractionAlerts: (() => {
+      const s = (results.metadata && results.metadata.llm_stats) || {};
+      const alerts = [];
+      if (s.messages_without_questions) alerts.push(`${s.messages_without_questions} message(s) produced no questions`);
+      if (s.extract_dropped_unsupported) alerts.push(`${s.extract_dropped_unsupported} extraction(s) dropped (no source contains them)`);
+      if (s.date_collisions_dropped) alerts.push(`${s.date_collisions_dropped} date-collision phantom(s) dropped`);
+      if (s.extract_reassigned) alerts.push(`${s.extract_reassigned} extraction(s) reassigned to their true source`);
+      return alerts.length ? alerts : null;
+    })(),
     groups: results.groups.map((g, i) => ({
       rank: i + 1,
       count: g.count,
