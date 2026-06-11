@@ -578,12 +578,22 @@ class QuestionAnalyzer:
         for q in questions:
             key = q.get('original_message') or ''
             produced_count[key] = produced_count.get(key, 0) + 1
-        suspicious = [(text, message) for text, message in candidates
-                      if len(self.extractor.extract_questions(text))
-                      > produced_count.get(text[:200], 0)]
+        suspicious = []
+        for text, message in candidates:
+            produced = produced_count.get(text[:200], 0)
+            if len(self.extractor.extract_questions(text)) > produced:
+                suspicious.append((text, message))
+            elif produced == 0 and len(text.split()) >= 8:
+                # A wordy message with NO extracted ask is exactly where
+                # implicit help requests ('been stuck on this all morning')
+                # and relayed wishes ('customer would like X') die silently
+                # — regex can't see those, so the count check above never
+                # fires for them
+                suspicious.append((text, message))
         if suspicious:
-            logger.info("Double-checking %d message(s) the fast model skipped "
-                        "but that look like questions...", len(suspicious))
+            logger.info("Double-checking %d message(s) that produced fewer "
+                        "questions than they look like they contain...",
+                        len(suspicious))
             # Field finding: the fast model sometimes attributes a question to
             # the WRONG message in its batch, leaving the true source looking
             # skipped — re-extracting it here then duplicated the question and
@@ -646,7 +656,17 @@ class QuestionAnalyzer:
         pipeline has now produced three different ways; this kills the
         whole class regardless of entry point. Cross-message occurrences
         (genuine repeats) are untouched.
+
+        The extra row is EJECTED to its own singleton group, not deleted:
+        by this stage the rephrase passes (lexical + two-judge consolidation)
+        have already run, so a different-text survivor from the same source
+        is at least as likely a DISTINCT ask the clusterer wrongly merged
+        (retention policy + auto-purge from one 'two things' message) as a
+        leaked rephrase. A wrong eject shows as one extra unique row; a
+        wrong delete is a silent drop — the worst bug class this project
+        has had.
         """
+        ejected: List[Dict] = []
         for group in groups:
             first_norm: Dict[str, str] = {}
             kept = []
@@ -654,14 +674,19 @@ class QuestionAnalyzer:
                 source = q.get('original_message')
                 norm = q.get('normalized_text')
                 if source and source in first_norm and norm != first_norm[source]:
-                    # A DIFFERENT rewrite from an already-counted source:
-                    # a rephrase, not a repeat. (Identical text from an
-                    # identical source stays countable — distinct short
-                    # messages can share the same text.)
-                    logger.info("Collapsed a same-source occurrence inside a "
-                                "group (one message = one asking): %.80r",
-                                q['text'])
-                    self._record_drop(q, 'same-source occurrence in a group')
+                    # A DIFFERENT rewrite from an already-counted source
+                    # can't count as a second asking of THIS topic.
+                    # (Identical text from an identical source stays
+                    # countable — distinct short messages can share text.)
+                    logger.info("Ejected a same-source occurrence into its "
+                                "own row (one message = one asking per "
+                                "topic): %.80r", q['text'])
+                    single = {'representative_question': q['text'],
+                              'questions': [q], 'count': 1,
+                              'avg_similarity': 1.0}
+                    if group.get('bucket'):
+                        single['bucket'] = group['bucket']
+                    ejected.append(single)
                     continue
                 if source:
                     first_norm.setdefault(source, norm)
@@ -669,7 +694,7 @@ class QuestionAnalyzer:
             if len(kept) < len(group['questions']):
                 group['questions'] = kept
                 group['count'] = len(kept)
-
+        groups.extend(ejected)
     def _enforce_render_integrity(self, groups: List[Dict]) -> List[Dict]:
         """
         'Occurrence' is defined ONCE, here, at the exit: a non-empty kept

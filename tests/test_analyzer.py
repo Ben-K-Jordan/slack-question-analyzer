@@ -248,8 +248,11 @@ def test_same_source_rephrases_never_count_as_recurrence(analyzer):
     """Fixture-2 round 4: same-message rephrases that slipped past
     consolidation clustered into a phantom 'asked 2x'. Invariant: within a
     group, one occurrence per source message — unless the texts are
-    identical (distinct short messages can share the same text)."""
-    phantom = {'count': 2, 'questions': [
+    identical (distinct short messages can share the same text).
+    Fixture-4 round 2: the extra row is EJECTED to its own singleton, not
+    deleted — it may be a distinct ask the clusterer wrongly merged, and
+    deleting it was a silent drop (it took the Answered metric with it)."""
+    phantom = {'count': 2, 'bucket': 'File Handling', 'questions': [
         {'text': 'How can I normalize file encoding during transfers?',
          'normalized_text': 'how can i normalize file encoding during transfers?',
          'original_message': 'm4'},
@@ -273,10 +276,20 @@ def test_same_source_rephrases_never_count_as_recurrence(analyzer):
          'normalized_text': 'cap how many transfers run at once per node?',
          'original_message': 'm11'},
     ]}
-    analyzer._collapse_same_source_occurrences([phantom, genuine, cross_message])
-    assert phantom['count'] == 1        # rephrase phantom collapsed
+    groups = [phantom, genuine, cross_message]
+    analyzer._collapse_same_source_occurrences(groups)
+    assert phantom['count'] == 1        # not a 2x recurrence anymore
     assert genuine['count'] == 2        # identical-text repeats untouched
     assert cross_message['count'] == 2  # genuine recurrence untouched
+    # The extra row survives as its own singleton, in the same bucket —
+    # no question vanishes from the page
+    assert len(groups) == 4
+    ejected = groups[3]
+    assert ejected['count'] == 1
+    assert ejected['questions'][0]['text'] == 'What is the right way to handle encoding?'
+    assert ejected['bucket'] == 'File Handling'
+    # Total rows are conserved: 6 in, 6 out
+    assert sum(g['count'] for g in groups) == 6
 
 def test_render_integrity_repairs_unprovable_groups(analyzer):
     """Exit invariant: a group may only render a count it can prove with
@@ -334,11 +347,14 @@ def test_total_questions_derived_from_rendered_rows(monkeypatch):
                         lambda texts, progress_callback=None: np.array([vectors[t] for t in texts]))
 
     # One message, two low-overlap rephrases (lexical collapse can't see
-    # them, no LLM consolidation with labels off) -> they cluster -> exit
-    # invariant collapses the occurrence -> total must be 1, not 2
+    # them, no LLM consolidation with labels off) -> they cluster -> the
+    # exit invariant breaks up the same-source pair: NOT a 2x recurrence
+    # (one message = one asking) but both rows stay on the page as
+    # singletons, and the total tile must equal exactly those rows
     results = analyzer.analyze_slack_content(
         "2024-06-03\nHow can we normalize encoding during transfers? "
         "What is the right way to deal with wrong-coded files?\n")
     rendered = (sum(g['count'] for g in results['groups'])
                 + len(results['ungrouped_questions']))
-    assert results['total_questions'] == rendered == 1
+    assert results['total_questions'] == rendered == 2
+    assert results['total_groups'] == 0  # no phantom 'asked 2x'
