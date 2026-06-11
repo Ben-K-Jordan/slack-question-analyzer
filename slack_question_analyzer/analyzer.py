@@ -372,6 +372,13 @@ class QuestionAnalyzer:
         DST issue timezone-related?"). For every message that produced 2+
         questions, the quality model picks the distinct asks (closed choice,
         abstain = keep all).
+
+        Dropping a question is destructive, so it follows the two-judge
+        rule: the consolidator nominates, and the verifier must confirm the
+        dropped question is the SAME ask as a kept one (explicit True).
+        Different/uncertain -> the question stays. This is what protects a
+        genuine two-part message (IP ranges + maintenance window) from
+        losing its second half.
         """
         if self.labeler is None or not self._llm_enabled('auto'):
             return questions
@@ -392,11 +399,22 @@ class QuestionAnalyzer:
             if keep is None:
                 continue
             keep_set = {indices[k - 1] for k in keep}
+            kept_texts = [questions[i]['text'] for i in indices if i in keep_set][:3]
             for i in indices:
-                if i not in keep_set:
-                    logger.info("Consolidated a same-ask rewrite: %.80r",
-                                questions[i]['text'])
-                    drop.add(i)
+                if i in keep_set:
+                    continue
+                verdict = self.labeler.verify_same_topic(
+                    [questions[i]['text']], kept_texts)
+                if verdict is not True:
+                    logger.info("Consolidation overruled by the verifier "
+                                "(distinct ask kept): %.80r", questions[i]['text'])
+                    if self.labeler is not None:
+                        self.labeler._count('consolidation_overruled')
+                    continue
+                logger.info("Consolidated a same-ask rewrite: %.80r",
+                            questions[i]['text'])
+                self.labeler._count('same_ask_collapsed')
+                drop.add(i)
         if drop:
             return [q for i, q in enumerate(questions) if i not in drop]
         return questions
@@ -486,15 +504,19 @@ class QuestionAnalyzer:
             report('detecting', batch_num, len(batches))
 
         # Safety net: a fast model can wrongly return "no questions" for a
-        # whole batch, silently losing a conversation. Any message the LLM
-        # skipped that the regex extractor flags as a question gets one
-        # second look from the quality model; if that also fails, the regex
-        # version is kept — losing real questions is worse than keeping a
-        # clumsy one.
-        covered = {q.get('original_message') for q in questions}
+        # whole batch — or extract only ONE ask from a genuine two-part
+        # message, silently losing the second half. Any message that
+        # produced FEWER questions than the regex extractor can see in it
+        # gets one second look from the quality model; if that also fails,
+        # the regex version is kept — losing real questions is worse than
+        # keeping a clumsy one.
+        produced_count: Dict[str, int] = {}
+        for q in questions:
+            key = q.get('original_message') or ''
+            produced_count[key] = produced_count.get(key, 0) + 1
         suspicious = [(text, message) for text, message in candidates
-                      if text[:200] not in covered
-                      and self.extractor.extract_questions(text)]
+                      if len(self.extractor.extract_questions(text))
+                      > produced_count.get(text[:200], 0)]
         if suspicious:
             logger.info("Double-checking %d message(s) the fast model skipped "
                         "but that look like questions...", len(suspicious))
