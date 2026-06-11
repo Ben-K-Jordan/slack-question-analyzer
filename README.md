@@ -28,6 +28,23 @@ AI-powered tool that analyzes Slack questions, groups similar ones together, and
 - **Date Tracking**: Shows when each question group was first and last asked
 - **Persistent Embedding Cache**: Embeddings are cached on disk (`.embedding_cache/`), so re-running an analysis is near-instant and never pays for the same API call twice
 - **Automatic Retries**: Transient provider/network failures are retried with exponential backoff
+- **Honest counts, provable**: a group can only display an occurrence count it
+  can back with populated rows from distinct source messages, and every
+  question any stage removed appears in a provenance trail ("Removed during
+  analysis") with its reason — nothing is ever silently consumed
+- **Knows when it doesn't know**: off-topic, too-vague, and new-capability
+  questions land in a visible *needs review* pile instead of being forced
+  into the nearest wrong category; a multi-question review cluster signals
+  that a new category should be added
+- **Product feedback lane**: feature requests (wish-phrasing, explicit
+  "feature request" labels, "doesn't look possible today") are routed out of
+  the support funnel into their own section
+- **Answered detection**: thread replies (Slack JSON exports or `>`-quoted
+  replies in plain text) mark questions as answered — promises and
+  clarifying questions don't count
+- **Regression-tested accuracy**: a fixture suite (`fixtures/`,
+  `slack-analyzer eval`) replays eight labeled transcripts end-to-end and
+  fails loudly on any drop, phantom, miscount, or forced route
 - **Multiple Output Formats**: Export results as JSON, CSV, or a Markdown report
 - **CLI Interface**: Easy-to-use command-line tool
 
@@ -91,7 +108,8 @@ The compose file runs the whole stack — the analyzer (API + dashboard) and Oll
 ```bash
 docker compose up -d --build
 docker compose exec ollama ollama pull nomic-embed-text
-docker compose exec ollama ollama pull llama3.2   # optional: enables the LLM features
+docker compose exec ollama ollama pull llama3.2     # enables the LLM features
+docker compose exec ollama ollama pull llama3.1:8b  # optional: better judgment calls (needs ~8GB RAM)
 ```
 
 Then open http://localhost:5000. Analyses, the embedding cache, and Ollama models
@@ -145,9 +163,11 @@ Higher threshold = stricter grouping (0.0 to 1.0):
 slack-analyzer analyze example_input.txt --threshold 0.9
 ```
 
-**By default the grouping bar is adaptive**: it starts at 0.85 and is raised
-automatically above your corpus's measured noise level (the bulk of pairwise
-similarities, p90 + `NOISE_GATE_MARGIN`). This matters because in a single-domain
+**With the shipped taxonomy, grouping uses a fixed bar** (`IN_BUCKET_THRESHOLD`,
+default 0.8) because LLM verification and auditing guard every borderline merge.
+Without a `taxonomy.json`, the bar is adaptive instead: it starts at 0.85 and is
+raised automatically above your corpus's measured noise level (the bulk of
+pairwise similarities, p90 + `NOISE_GATE_MARGIN`). This matters because in a single-domain
 channel, embedding models score even UNRELATED questions very high — any fixed
 threshold eventually sits inside that noise band and merges different topics. The
 console logs the effective bar per run. If nothing groups and your most similar pair
@@ -240,7 +260,7 @@ ollama pull llama3.1:8b   # or llama3.2 on machines with less RAM
 |---|---|---|
 | Topic labels | Names each group (2-4 words) and writes a one-sentence summary | `GROUP_LABELS` |
 | Group verification | Double-checks group pairs whose similarity falls just below the threshold and merges them when they're the same topic | `LLM_VERIFY_GROUPS` |
-| Question extraction | By default (`auto`), the LLM extracts and cleanly rewrites **every** question for transcripts up to 150 messages (best quality; regex fallback per batch); larger transcripts use regex plus an LLM pass for implicit help requests. `full` forces LLM-first at any size, `on` is regex-first only | `LLM_EXTRACTION` |
+| Question extraction | By default (`auto`), the LLM extracts and cleanly rewrites **every** question for transcripts up to 150 messages (best quality; regex fallback per batch); transcripts up to `EXTRACT_QUALITY_MAX` (30) messages use the **quality** model end-to-end; larger transcripts use regex plus an LLM pass for implicit help requests. `full` forces LLM-first at any size, `on` is regex-first only | `LLM_EXTRACTION` |
 | Answer detection | Reads thread replies (Slack JSON exports) and decides whether each question was actually answered — feeds the "Answered" metric | `LLM_ANSWER_DETECTION` |
 | Executive summary | 2-3 sentence overview of the dominant themes, shown on the dashboard and in Markdown reports | `EXECUTIVE_SUMMARY` |
 
@@ -284,11 +304,21 @@ The tool generates a JSON file with the following structure:
     }
   ],
   "ungrouped_questions": [...],
+  "feature_requests": [...],
+  "dropped_questions": [{"text": "...", "reason": "same-message rephrasing", "source": "..."}],
+  "themes": [{"name": "Operations & Performance", "count": 9}],
+  "threads_present": false,
+  "answered_questions": 0,
+  "executive_summary": "...",
   "metadata": {
     "analyzed_at": "2026-06-09T20:00:00Z",
     "similarity_threshold": 0.85,
     "model": "nomic-embed-text",
-    "provider": "ollama"
+    "provider": "ollama",
+    "app_version": "2.39.0",
+    "prompt_pack": 19,
+    "routing": {"taxonomy_version": 3, "routed": 12, "needs_review": 1},
+    "llm_stats": {"verify_true": 2, "audit_evictions": 1}
   }
 }
 ```
@@ -325,19 +355,29 @@ open-ended thing (find categories in a pile of questions). Embeddings handle
 similarity, plain code handles counting and merging, and the LLM only answers
 small closed questions (sort one item, judge one group).
 
-1. **Extraction**: the fast chat model extracts and rewrites every question
-   to be self-contained (regex + a quality-model double-check as safety nets)
-2. **Routing** (`taxonomy.json`): every question goes to its nearest bucket
-   anchor by embedding similarity. Top-2 anchors too close → the quality
-   model picks a number from a closed list. Near no anchor → kept and flagged
-   **needs review** (a growing review pile means a new category is being born)
-3. **In-bucket grouping**: clustering runs *inside* each bucket at a fixed
-   relaxed bar (`IN_BUCKET_THRESHOLD`); the learned topic bank claims
-   questions it recognizes, and the LLM audits every formed group
+1. **Extraction**: the chat model extracts and rewrites every question to be
+   self-contained (small transcripts use the quality model end-to-end; regex
+   and a quality-model double-check act as safety nets). Deterministic
+   invariants clean up after it: source-support, same-message rephrase
+   collapse, the single-ask cap, and a hard rule that an enumerated split
+   ("1. ... 2. ...") can never be re-merged
+2. **Global grouping — meaning first**: ALL questions cluster together at a
+   fixed bar (`IN_BUCKET_THRESHOLD`), so a recurrence can never be
+   fragmented by category noise. The learned topic bank claims questions it
+   recognizes; borderline merges get an LLM verify; every formed group gets
+   a two-judge audit, with routing as the tie-breaking third judge
+3. **Cluster routing** (`taxonomy.json`): each *cluster* goes to its nearest
+   bucket anchor by embedding similarity. Top-2 anchors too close, or a weak
+   best match → the quality model picks from a closed list (with an explicit
+   "none of these" option). Unroutable clusters are held for **review** as a
+   unit — a multi-question review cluster is the signal that a new category
+   is being born
 4. **Merge map**: each bucket collapses into its fixed `category` from
    `taxonomy.json` — the dashboard's themes strip, deterministic code
 5. **Ranking**: groups sort by frequency, then cohesion; keywords are scored
-   against the rest of the corpus
+   against the rest of the corpus. A group may only render a count it can
+   prove with populated, distinct-source rows — and everything any stage
+   removed is recorded in `dropped_questions` with its reason
 
 The taxonomy is versioned data, not code: edit `taxonomy.json`, bump its
 `version`, and every result records which taxonomy version classified it
@@ -402,6 +442,13 @@ Dashboard features:
 - **Week in Review**: real weekly trends computed from your latest analysis — volume
   vs last week, 6-week trend, and per-topic rank movement (weeks are anchored to the
   most recent question date in the transcript, so historical exports work too)
+- **Needs review & provenance**: questions the router honestly couldn't place
+  get their own amber section; a collapsible "Removed during analysis" list
+  shows every collapsed duplicate with its reason and source message
+- **Answered chips**: when the transcript contains thread replies, answered
+  questions and per-group answered counts are marked in green
+- **Stale-results banner**: results saved by an older app version show an
+  amber notice so you know to re-upload after updating
 - Before your first analysis, both views show a clean backend-driven empty state
   with an upload prompt — never sample data
 
@@ -511,14 +558,24 @@ slack-question-analyzer/
 │   ├── __init__.py
 │   ├── __main__.py
 │   ├── cli.py              # Command-line interface (the slack-analyzer command)
-│   ├── analyzer.py         # Main analysis orchestration
+│   ├── analyzer.py         # Pipeline orchestration & invariants
 │   ├── question_extractor.py  # Multi-format parsing & question detection
 │   ├── similarity_analyzer.py # Embeddings, dedupe tiers & grouping
-│   ├── group_labeler.py    # LLM prompting layer
+│   ├── group_labeler.py    # LLM prompting layer (all prompts live here)
+│   ├── taxonomy.py         # Bucket routing (anchors, abstention)
+│   ├── topic_bank.py       # Learned topics across analyses
+│   ├── evaluation.py       # Regression harness (slack-analyzer eval)
 │   ├── weekly_stats.py     # Week-in-Review computation
+│   ├── inputs.py           # File/zip loading
+│   ├── model_defaults.py   # RAM-aware model selection
+│   ├── disk_cache.py       # JSON disk caches
 │   └── exporters.py        # CSV / Markdown export
-├── tests/                  # pytest suite
+├── tests/                  # pytest suite (no Ollama needed)
+├── fixtures/               # Labeled eval transcripts + answer keys
+├── taxonomy.json           # Routing buckets (versioned data, edit freely)
+├── seed_topics.json        # Curated topic names for the bank's first run
 ├── api_server.py           # Flask API + dashboard server
+├── PIPELINE.md             # Full pipeline spec & design history
 ├── Question Analyzer Design System/  # React dashboard + design system
 ├── pyproject.toml          # Package metadata & dependencies
 ├── Dockerfile / docker-compose.yml   # Container setup
@@ -537,6 +594,22 @@ python -m pytest tests/
 slack-analyzer validate example_input.txt
 slack-analyzer analyze example_input.txt
 ```
+
+### Regression Evaluation
+
+Eight labeled fixtures (`fixtures/`) replay real and synthetic transcripts
+end-to-end against answer keys — exact counts, recurrence sizes, feedback
+membership, routing abstentions, noise rejection, provenance. Run after ANY
+prompt, anchor, or threshold change (requires Ollama with the models pulled):
+
+```bash
+slack-analyzer eval            # all fixtures; exits 1 on any miss
+slack-analyzer eval fixtures/mft_synthetic_7.json   # just one
+```
+
+Each fixture's human-readable trap map lives next to it
+(`fixtures/mft_test_answer_key*.md`). To freeze a new transcript into the
+suite, copy an existing `mft_synthetic_*.json` and adjust its `expect` block.
 
 ## License
 

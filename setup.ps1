@@ -61,6 +61,11 @@ if ($ramGB -ge 12) {
 }
 ollama pull nomic-embed-text
 ollama pull $chatModel
+if ($chatModel -ne "llama3.2") {
+    # The fast model: token-heavy extraction on large transcripts goes to
+    # the 3B while the 8B handles the judgment calls
+    ollama pull llama3.2
+}
 Write-Host "[OK] Models ready"
 
 # 5. Desktop shortcut for daily use (best-effort)
