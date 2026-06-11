@@ -37,7 +37,10 @@ free and prompt edits self-invalidate the cache.
 ## Stage 0 — Parse & extract (fast model + code)
 
 1. Transcript parsed into messages (Slack JSON with threads, dashed-separator
-   text, or CSV). Markup, code blocks, mentions stripped.
+   text, or CSV). Markup, code blocks, mentions stripped. In plain text,
+   '>'-quoted lines are thread replies: attached to the parent for answer
+   detection, never extracted as questions (a responder's clarifying
+   question is not an ask); '# ' heading lines are structural markup.
 2. **LLM-first extraction** (transcripts ≤ 150 messages; batches of 8):
    the fast model classifies each sentence REAL / RHETORICAL / CONTEXT,
    rewrites every REAL ask as a standalone question, preserves the asker's
@@ -321,15 +324,21 @@ miss. Two fixture types:
   correct buckets and groupings. Scores routing accuracy and grouping
   precision/recall, listing every mismatch, missed pair, wrong pair, and
   integrity violation.
-- **Transcript-level** (`mft_synthetic_1.json`, `mft_synthetic_2.json`,
-  `"type": "transcript"`): a raw transcript plus an answer key. Runs the
-  FULL pipeline — extraction included — and asserts the key's headline
-  numbers: total asks, per-message ask counts (collapse traps vs split
-  controls), the one true recurrence, exact feedback membership, verb-drift
-  bans, false-merge twins, and zero integrity repairs. Extraction bugs
-  (silent drops, over-splitting, verb drift, feedback misrouting) happen
+- **Transcript-level** (`mft_synthetic_1..4.json`, `"type": "transcript"`):
+  a raw transcript plus an answer key. Runs the FULL pipeline — extraction
+  included — and asserts the key's headline numbers: total asks,
+  per-message ask counts (collapse traps vs split controls), named
+  recurrences with exact occurrence counts, genuine singletons the rescue
+  pass must leave alone, exact feedback membership, verb-drift bans,
+  false-merge twins, the Answered count with per-question membership, and
+  occurrence integrity (every count provable with populated distinct-source
+  rows; zero integrity repairs). Extraction bugs (silent drops,
+  over-splitting, verb drift, feedback misrouting, reply leakage) happen
   before routing, so only this type can see them. The human-readable trap
-  maps live next to them (`mft_test_answer_key*.md`).
+  maps live next to them (`mft_test_answer_key*.md`). Fixture themes:
+  1 = trap map (drops, scaffolding, verb drift), 2 = calibration pairs +
+  feedback gate, 3 = occurrence/recurrence integrity, 4 = threads +
+  Answered + tokenization stress.
 
 The topic bank is excluded from both types (transcript runs get a temp
 empty bank) so the score measures the pipeline, not one machine's learned

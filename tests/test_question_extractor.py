@@ -129,3 +129,62 @@ def test_decimal_numbers_do_not_split_sentences():
         'How can my customer check transaction statistics in WM MFT 10.15 for commercial purposes?')
     assert len(questions) == 1
     assert '10.15' in questions[0]
+
+
+def test_quoted_lines_become_replies_not_questions():
+    """'>' quoted lines are thread replies: attached to the parent for
+    answer detection, never extracted as the asker's questions — a
+    responder's clarifying question is not an ask."""
+    extractor = QuestionExtractor()
+    content = (
+        'June 4, 2026\n\n'
+        'Why are transfers failing intermittently to partner X?\n'
+        '> Reply (Sam): Are they failing around the same time of day?\n'
+        '-----------------------------------------------------------\n'
+        'June 9, 2026\n\n'
+        'How do I increase the SFTP connection timeout?\n'
+        '> Reply (Priya): Set mft.sftp.connectionTimeout to 300000\n'
+        '> and restart the Integration Server.\n'
+    )
+    messages = extractor.extract_messages(content)
+    assert len(messages) == 2
+    assert messages[0]['replies'] == [
+        'Reply (Sam): Are they failing around the same time of day?']
+    assert 'same time of day' not in messages[0]['text']
+    # Consecutive quoted lines are ONE reply
+    assert len(messages[1]['replies']) == 1
+    assert 'restart the Integration Server' in messages[1]['replies'][0]
+
+    questions = extractor.questions_from_messages(messages)
+    texts = [q['text'] for q in questions]
+    assert not any('same time of day' in t for t in texts)
+    assert all(q.get('replies') for q in questions)
+
+
+def test_blank_line_separates_replies():
+    extractor = QuestionExtractor()
+    messages = extractor.extract_messages(
+        'June 3, 2026\n\nCan we set retention policies?\n'
+        '> First reply here.\n\n> Second reply here.\n')
+    assert messages[0]['replies'] == ['First reply here.', 'Second reply here.']
+
+
+def test_heading_lines_are_not_message_content():
+    """'# ' heading/comment lines are structural markup, like fenced code."""
+    extractor = QuestionExtractor()
+    messages = extractor.extract_messages(
+        'Transcript header line\n'
+        '# Convention: each block is one thread.\n\n'
+        'June 9, 2026\n\n'
+        'How do I increase the timeout?\n')
+    assert len(messages) == 1
+    assert 'Convention' not in messages[0]['text']
+    # A '#channel' mention is NOT a heading (no space after #)
+    messages = extractor.extract_messages(
+        'June 9, 2026\n\n#prod-support is asking: how do I increase the timeout?\n')
+    assert '#prod-support' in messages[0]['text']
+
+
+def test_reply_only_block_produces_no_message():
+    extractor = QuestionExtractor()
+    assert extractor.extract_messages('> just a stray quoted line\n') == []
