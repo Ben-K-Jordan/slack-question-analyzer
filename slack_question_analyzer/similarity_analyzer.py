@@ -708,6 +708,8 @@ class SimilarityAnalyzer:
                     best_group, best_sim = gi, sim
             if best_sim < self.effective_threshold - margin:
                 continue  # genuinely far from everything: rare, not wrong
+            if not self._types_compatible(cluster, clusters[best_group], buckets):
+                continue  # different question kind than its nearest group
             checked += 1
             group_texts = [buckets[j][0]['text'] for j in clusters[best_group][:3]]
             if verifier([buckets[s][0]['text']], group_texts) is True:
@@ -752,6 +754,35 @@ class SimilarityAnalyzer:
                     continue
             audited.append(cluster)
         return audited
+
+    # Question types collapse into three families: asking about a capability,
+    # reporting a breakage, or giving product feedback. A capability question
+    # and a breakage report about the same feature are different items needing
+    # different handling — LLM-assisted merges across families are vetoed.
+    # This is the GENERAL rule behind every observed false merge (shared
+    # vocabulary, different intent), so it needs no per-instance examples.
+    TYPE_FAMILIES = {'how-to': 'capability', 'is-it-possible': 'capability',
+                     'feature-request': 'feedback',
+                     'troubleshooting': 'breakage', 'defect-report': 'breakage'}
+
+    def _cluster_type_families(self, cluster: List[int],
+                               buckets: List[List[Dict]]) -> set:
+        families = set()
+        for idx in cluster:
+            for q in buckets[idx]:
+                family = self.TYPE_FAMILIES.get(q.get('qtype'))
+                if family:
+                    families.add(family)
+        return families
+
+    def _types_compatible(self, cluster_a: List[int], cluster_b: List[int],
+                          buckets: List[List[Dict]]) -> bool:
+        """Untyped questions are always compatible (no information, no veto)."""
+        families_a = self._cluster_type_families(cluster_a, buckets)
+        families_b = self._cluster_type_families(cluster_b, buckets)
+        if not families_a or not families_b:
+            return True
+        return bool(families_a & families_b)
 
     def _merge_borderline_clusters(self, clusters: List[List[int]], similarity_matrix,
                                    buckets: List[List[Dict]], verifier) -> List[List[int]]:
@@ -798,6 +829,15 @@ class SimilarityAnalyzer:
             pair_sims = [similarity_matrix[x][y]
                          for ix, x in enumerate(combined) for y in combined[ix + 1:]]
             if float(np.mean(pair_sims)) < self.effective_threshold - margin:
+                continue
+
+            # Type-family veto: a capability question never LLM-merges with
+            # a breakage report, however similar the vocabulary
+            if not self._types_compatible(clusters[ra], clusters[rb], buckets):
+                logger.info("Skipped a cross-type merge (different question "
+                            "kinds): %.60r / %.60r",
+                            buckets[clusters[ra][0]][0]['text'],
+                            buckets[clusters[rb][0]][0]['text'])
                 continue
 
             texts_a = [buckets[idx][0]['text'] for idx in clusters[ra][:3]]
