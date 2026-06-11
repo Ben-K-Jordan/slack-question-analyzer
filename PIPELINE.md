@@ -1,6 +1,17 @@
-# The Question Funnel — Pipeline Spec (v2.29, prompt pack 11, taxonomy v3)
+# The Question Funnel — Pipeline Spec (v2.30, prompt pack 12, taxonomy v3)
 
 > Deltas since the prompts/stages quoted below were written:
+> - Eval round 4 (fixtures 5/6 baselines): routing gains a CONFIDENCE
+>   floor (best anchor < 0.55 -> the closed LLM choice with abstain, so
+>   off-topic/vague questions reach review instead of the closest wrong
+>   bucket; ambiguity margin widened to 0.05). The recovery pass no
+>   longer restores question-shaped statements over an explicit
+>   quality-model "no ask" — only a literal '?' overrules two models.
+>   Extraction prompt: venting without a symptom, log pastes with no
+>   request, and social banter yield NOTHING; never rewrite a statement
+>   into a question. Rephrase-collapse tokens get light suffix folding
+>   (fails/failed/transfers share a stem) so reworded restatements
+>   can't survive as fake 2x groups.
 > - Eval round 3: feedback diversion is gated on DETERMINISTIC wish
 >   phrasing in the source message — without it a question stays in
 >   support no matter what any model says (the 8B had diverted plain

@@ -336,9 +336,18 @@ class QuestionAnalyzer:
         """
         threshold = float(os.getenv('SAME_MESSAGE_REPHRASE_OVERLAP', '0.5'))
 
+        def stem(t):
+            # Light suffix-folding so 'failed transfers' and 'transfer
+            # fails' count as shared content — a real rephrase pair scored
+            # ZERO overlap on exact tokens and survived as a fake 2x
+            for suffix in ('ing', 'ed', 'es', 's'):
+                if t.endswith(suffix) and len(t) - len(suffix) >= 3:
+                    return t[:len(t) - len(suffix)]
+            return t
+
         def tokens(q):
-            return {t for t in re.findall(r'[a-z0-9]+',
-                                          q['normalized_text'].lower())
+            return {stem(t) for t in re.findall(r'[a-z0-9]+',
+                                                q['normalized_text'].lower())
                     if len(t) > 3}
 
         def rank(q, toks):
@@ -660,6 +669,18 @@ class QuestionAnalyzer:
                     add_unless_duplicate(question)
                 for q in self.extractor.questions_from_messages(
                         [m for i, (_, m) in enumerate(batch) if i not in recovered]):
+                    # When the quality model SAW the message and said 'no
+                    # questions here' (hits succeeded), only an explicit '?'
+                    # can overrule it. Question-shaped statements ('Will
+                    # post here when it's back up') fabricated asks from
+                    # announcements when restored on shape alone. A FAILED
+                    # call (None) still restores everything — losing real
+                    # questions stays worse than keeping a clumsy one.
+                    if hits is not None and '?' not in q['text']:
+                        logger.info("Not restoring a question-shaped "
+                                    "statement (two models said no ask, no "
+                                    "'?'): %.80r", q['text'])
+                        continue
                     add_unless_duplicate(q)
 
         # Reconciliation: questions must never vanish silently. Every message
