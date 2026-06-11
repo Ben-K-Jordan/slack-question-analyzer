@@ -192,7 +192,7 @@ FEEDBACK_SYSTEM = (
 
 # Prompt pack version: stamped into results metadata so drift is traceable
 # (the LLM cache keys on full prompt text, so bumps also invalidate caches)
-PROMPT_PACK_VERSION = 14
+PROMPT_PACK_VERSION = 15
 
 LABEL_SYSTEM = (
     "If the group is empty, malformed, or too mixed to share one honest "
@@ -265,6 +265,10 @@ VERIFY_SYSTEM = (
     "Group B asks how to verify the other party's identity before "
     "connecting. Credential lifecycle vs identity verification — related "
     "security tasks, different doc pages: {\"same_topic\": false}\n"
+    "Example: Group A asks how to renew a TLS certificate; Group B asks how "
+    "to renew an API token. The SAME action on DIFFERENT objects is a "
+    "different topic — each renewal has its own procedure and page: "
+    "{\"same_topic\": false}\n"
     "Example: Group A asks how to merge the content of two files; Group B asks "
     "whether a control file can trigger a transfer. Both mention files, but "
     "merging contents and trigger-on-control-file are different operations "
@@ -316,8 +320,14 @@ ROUTE_SYSTEM = (
     "confidence, reply {\"category\": 0}. Do not guess.\n\n"
     "You sort ONE support question into exactly one category. Reply with only "
     "the category number.\n"
-    "If the question fits two categories almost equally, OR fits none of them "
-    "well, reply 0.\n"
+    "These categories cover ONE specific product's support questions. A "
+    "question about anything else — another tool or website, company "
+    "logistics, vendor support hours, IT chat — is 0, even when a category "
+    "NAME sounds related ('is the wiki down?' is not a product connectivity "
+    "question).\n"
+    "If the question fits two categories almost equally, fits none of them "
+    "well, or is too vague to have a subject at all ('is there a limit?'), "
+    "reply 0.\n"
     "Never invent a number. Never explain.\n"
     "Respond with JSON only: {\"category\": <number>}"
 )
@@ -415,8 +425,10 @@ EXTRACT_SYSTEM = (
     "Rewrite every REAL question as a single standalone question.\n"
     "Standalone test: a reader who never saw the message can answer it "
     "without asking what 'it', 'this', 'they', or 'the platform' refers to — "
-    "pull the subject into the question explicitly. Drop greetings, "
-    "signatures, and bullet characters.\n"
+    "pull the subject into the question explicitly. But ONLY from the "
+    "message itself: if the message names no subject ('Is there a limit?'), "
+    "keep the question as written — NEVER invent specifics the message "
+    "doesn't contain. Drop greetings, signatures, and bullet characters.\n"
     "Rules:\n"
     "- A message often contains MORE THAN ONE real question: output one entry "
     "per REAL question, repeating the message number. Implicit help requests "

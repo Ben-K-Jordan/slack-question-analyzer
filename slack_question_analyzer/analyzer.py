@@ -143,10 +143,21 @@ class QuestionAnalyzer:
             # time alone can blow a per-call timeout and silently downgrade
             # the whole extraction to regex
             self.labeler.warm_up()
-            questions = self._extract_questions_llm(messages, report)
+            # Extraction is the hardest open-ended job in the pipeline, and
+            # seven eval rounds of fast-model wobble (fabricated questions,
+            # invented subjects, rhetorical leaks) say so. On a SMALL
+            # transcript the token cost is affordable: give the whole job
+            # to the quality model
+            quality = len(messages) <= int(os.getenv('EXTRACT_QUALITY_MAX', '30'))
+            if quality:
+                logger.info("Small transcript (%d messages): the quality "
+                            "model handles extraction directly", len(messages))
+            questions = self._extract_questions_llm(messages, report,
+                                                    thorough=quality)
             did_full = True
         else:
             questions = self.extractor.questions_from_messages(messages)
+        questions = self._drop_rhetorical_filler(questions)
         questions = self._collapse_same_message_rephrasings(questions)
         questions = self._enforce_date_integrity(questions)
         questions = self._consolidate_same_ask(questions)
@@ -317,6 +328,39 @@ class QuestionAnalyzer:
                               'source': question.get('original_message'),
                               'reason': reason})
 
+    # Content-free rhetorical filler the extraction prompt already names —
+    # built only from pronouns and pleasantries, so there is nothing to
+    # answer no matter the context. The models keep leaking these (and the
+    # two-judge consolidation once PROTECTED one), so the prompt's own list
+    # is enforced in code.
+    _RHETORICAL_FILLER_RE = re.compile(
+        r'^(?:has |have )?(?:anyone|anybody)(?: else)? (?:seen|hit|run into)'
+        r'(?: this| that| it)?(?: before)?$'
+        r'|^any (?:thoughts|ideas|luck|advice)(?: on this| on that)?$'
+        r'|^(?:right|thoughts|make sense|does that make sense|makes sense)$',
+        re.IGNORECASE)
+
+    def _drop_rhetorical_filler(self, questions: List[Dict]) -> List[Dict]:
+        kept = []
+        for q in questions:
+            text = re.sub(r'[?!.\s]+$', '', (q.get('text') or '').strip())
+            if self._RHETORICAL_FILLER_RE.match(text):
+                logger.info("Dropped content-free rhetorical filler: %.80r",
+                            q['text'])
+                self._record_drop(q, 'rhetorical filler (content-free)')
+                continue
+            kept.append(q)
+        return kept
+
+    # A question that LEADS with a restatement marker is by its own words a
+    # rewording of the message's other ask — the marker is deterministic
+    # evidence the lexical-overlap test can't see ('I mean is there a
+    # built-in way to gzip the payload?' shares no content words with 'Can
+    # we compress files before sending?')
+    _RESTATE_MARKER_RE = re.compile(
+        r'^(?:basically|i mean|in other words|that is|so basically'
+        r'|put differently)\b', re.IGNORECASE)
+
     def _collapse_same_message_rephrasings(self, questions: List[Dict]) -> List[Dict]:
         """
         Two extractions of the same ask from ONE message are one question,
@@ -364,6 +408,7 @@ class QuestionAnalyzer:
         for q in questions:
             source = q.get('original_message') or ''
             toks = tokens(q)
+            marked = bool(self._RESTATE_MARKER_RE.match((q.get('text') or '').strip()))
             match = None
             for seen in by_message.get(source, []):
                 # IDENTICAL text is a genuine repeat (someone asked the exact
@@ -371,6 +416,11 @@ class QuestionAnalyzer:
                 # DIFFERENT rewrite with heavy overlap is a rephrasing.
                 if seen['norm'] == q['normalized_text']:
                     continue
+                # Either side leading with a restatement marker IS the
+                # overlap evidence — the asker said so themselves
+                if marked or seen['marked']:
+                    match = seen
+                    break
                 overlap = len(toks & seen['tokens']) / max(1, min(len(toks), len(seen['tokens'])))
                 if overlap >= threshold:
                     match = seen
@@ -382,14 +432,14 @@ class QuestionAnalyzer:
                     self._record_drop(match['q'], 'same-message rephrasing (lexical)')
                     kept[match['pos']] = q
                     match.update(norm=q['normalized_text'], tokens=toks,
-                                 q=q, rank=rank(q, toks))
+                                 q=q, rank=rank(q, toks), marked=marked)
                 else:
                     logger.info("Collapsed a same-message rephrasing: %.80r", q['text'])
                     self._record_drop(q, 'same-message rephrasing (lexical)')
                 continue
             by_message.setdefault(source, []).append(
                 {'norm': q['normalized_text'], 'tokens': toks, 'q': q,
-                 'rank': rank(q, toks), 'pos': len(kept)})
+                 'rank': rank(q, toks), 'pos': len(kept), 'marked': marked})
             kept.append(q)
         return kept
 
@@ -552,7 +602,8 @@ class QuestionAnalyzer:
             return [q for q in questions if id(q) not in dropped]
         return questions
 
-    def _extract_questions_llm(self, messages: List[Dict], report) -> List[Dict]:
+    def _extract_questions_llm(self, messages: List[Dict], report,
+                                thorough: bool = False) -> List[Dict]:
         """
         LLM-first extraction (LLM_EXTRACTION=full): every message goes to the
         LLM, which extracts and cleanly rewrites each question. Batches where
@@ -574,7 +625,8 @@ class QuestionAnalyzer:
         seen_in_message = set()  # (normalized_text, original_message)
         report('detecting', 0, len(batches))
         for batch_num, batch in enumerate(batches, 1):
-            hits = self.labeler.extract_questions([text for text, _ in batch])
+            hits = self.labeler.extract_questions(
+                [text for text, _ in batch], thorough=thorough)
             if hits is not None:  # [] is a real answer: "no questions here"
                 for hit in hits:
                     text, message = batch[hit['index']]

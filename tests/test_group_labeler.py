@@ -596,6 +596,7 @@ def test_safety_net_rechecks_wordy_messages_with_no_regex_questions(monkeypatch)
 
 
 def test_safety_net_skips_terse_no_question_messages(monkeypatch):
+    monkeypatch.setenv('EXTRACT_QUALITY_MAX', '0')  # isolate the recheck path
     """The zero-question recheck only fires for wordy prose — a short
     status line ('Deployed the fix, all green.') stays cheap: no thorough
     call, no questions."""
@@ -764,6 +765,9 @@ def test_feature_requests_leave_the_support_funnel(monkeypatch):
 # ---- Source-support invariant (misattribution guard) ----
 
 def test_misattributed_extraction_is_reassigned_to_true_source(monkeypatch):
+    # Pin the fast-model primary pass: this scenario IS fast-model
+    # misattribution (small transcripts otherwise use the quality model)
+    monkeypatch.setenv('EXTRACT_QUALITY_MAX', '0')
     """Ground-truth audit regression: the fast model stamped the custom-error
     question onto a metering message's index. The question inherited the
     wrong date, the metering question vanished, and the duplicate became a
@@ -1249,3 +1253,40 @@ def test_choose_bucket_presents_abstain_as_a_listed_option(monkeypatch):
     assert labeler.choose_bucket('Is the wiki down?', [
         {'id': 3, 'name': 'Connectivity'}, {'id': 5, 'name': 'Scheduling'}]) == 0
     assert '0 NONE OF THESE' in captured['user']
+
+
+def test_compound_question_missing_half_restored_by_regex_fallback(monkeypatch):
+    """End-to-end mechanism check for the two-round Kafka loss: a compound
+    'and separately' sentence where the LLM only ever extracts the first
+    half (fast AND thorough). The splitter makes regex see two questions,
+    the under-extraction trigger fires, and the '?'-bearing missing half is
+    restored by the regex fallback."""
+    monkeypatch.setenv('LLM_EXTRACTION', 'full')
+    vectors = {
+        'does mft support mutual tls for https partner endpoints?': [1.0, 0.0],
+        'can it post a transfer-complete event to an external kafka topic?': [0.0, 1.0],
+    }
+    analyzer = make_analyzer(monkeypatch, vectors=vectors, label_groups=True)
+
+    def extract(texts, thorough=False):
+        # The model NEVER sees the second half, no matter which model runs
+        out = []
+        for i, t in enumerate(texts):
+            if 'mutual TLS' in t:
+                out.append({'index': i, 'question':
+                            'Does MFT support mutual TLS for HTTPS partner endpoints?'})
+        return out
+
+    stub_llm(monkeypatch, analyzer,
+             label_group=lambda texts, keywords=None: None,
+             verify_same_topic=lambda a, b: False,
+             extract_questions=extract,
+             summarize_analysis=lambda groups, total, themes=None: None)
+
+    results = analyzer.analyze_slack_content(
+        '2024-06-06\nQuick one - does MFT support mutual TLS for HTTPS partner '
+        'endpoints, and separately, can it post a transfer-complete event to '
+        'an external Kafka topic?\n')
+    texts = [q['text'] for q in results['ungrouped_questions']]
+    assert results['total_questions'] == 2
+    assert any('Kafka' in t for t in texts), texts

@@ -1,6 +1,21 @@
-# The Question Funnel — Pipeline Spec (v2.32, prompt pack 14, taxonomy v3)
+# The Question Funnel — Pipeline Spec (v2.33, prompt pack 15, taxonomy v3)
 
 > Deltas since the prompts/stages quoted below were written:
+> - Eval round 7: small transcripts (<= EXTRACT_QUALITY_MAX, default 30
+>   messages) hand PRIMARY extraction to the quality model — extraction
+>   is the hardest open-ended job and seven rounds of 3B wobble say so.
+>   Content-free rhetorical filler ('Anyone seen this before?') is
+>   dropped in CODE (the prompt's own list, enforced; the two-judge
+>   consolidation once protected one). A question LEADING with a
+>   restatement marker ('I mean...', 'Basically...') collapses with its
+>   message's other ask regardless of lexical overlap. The Kafka
+>   half-loss root cause: 'Quick one - does X...' hid its question word
+>   behind the opener, so regex counted 1 while the questions differed —
+>   greetings are now stripped BEFORE the question test and the opener
+>   list covers conversational prefixes. ROUTE gains the product-scope
+>   rule; EXTRACT forbids inventing subjects ('Is there a limit?' must
+>   stay subjectless); VERIFY gains the same-action-different-object
+>   example.
 > - Eval round 6: route adjudication shows abstain as a LISTED option
 >   ('0 NONE OF THESE...') — given only real categories a small model
 >   picks from the list every time, so off-topic questions were
