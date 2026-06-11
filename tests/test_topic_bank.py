@@ -137,7 +137,7 @@ def test_bank_match_floor_ignores_loose_thresholds(monkeypatch):
     monkeypatch.setattr(analyzer.similarity_analyzer, 'get_embeddings_batch', fake_batch)
     monkeypatch.setattr(analyzer.labeler, 'available', lambda: True)
     monkeypatch.setattr(analyzer.labeler, 'verify_same_topic', lambda a, b: None)
-    monkeypatch.setattr(analyzer.labeler, 'summarize_analysis', lambda g, t: None)
+    monkeypatch.setattr(analyzer.labeler, 'summarize_analysis', lambda g, t, themes=None: None)
     monkeypatch.setattr(analyzer.labeler, 'label_group',
                         lambda texts, keywords=None: {'topic': 'Password Reset',
                                                       'summary': 's'})
@@ -192,7 +192,7 @@ def make_analyzer(monkeypatch):
     monkeypatch.setattr(analyzer.similarity_analyzer, 'get_embeddings_batch', fake_batch)
     monkeypatch.setattr(analyzer.labeler, 'available', lambda: True)
     monkeypatch.setattr(analyzer.labeler, 'verify_same_topic', lambda a, b: None)
-    monkeypatch.setattr(analyzer.labeler, 'summarize_analysis', lambda g, t: None)
+    monkeypatch.setattr(analyzer.labeler, 'summarize_analysis', lambda g, t, themes=None: None)
     return analyzer
 
 

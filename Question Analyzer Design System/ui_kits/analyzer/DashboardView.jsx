@@ -84,6 +84,8 @@ function DashboardView({ onUpload }) {
 
   const d = analysisResults ? transformAnalysisResults(analysisResults) : null;
   const [query, setQuery] = React.useState('');
+  const [themeFilter, setThemeFilter] = React.useState(null);
+  const [openUnique, setOpenUnique] = React.useState(null); // expanded original message
   const [visibleCount, setVisibleCount] = React.useState(PAGE_SIZE);
   const [showUnique, setShowUnique] = React.useState(true);
 
@@ -97,11 +99,36 @@ function DashboardView({ onUpload }) {
   };
   const max = d && d.groups && d.groups.length > 0 ? d.groups[0].count : 0;
   const groups = d && d.groups ? d.groups.filter((g) =>
-    g.question.toLowerCase().includes(query.toLowerCase()) ||
+    (!themeFilter || g.theme === themeFilter) &&
+    (g.question.toLowerCase().includes(query.toLowerCase()) ||
     g.keywords.join(' ').includes(query.toLowerCase()) ||
-    (g.topic && g.topic.toLowerCase().includes(query.toLowerCase()))) : [];
+    (g.topic && g.topic.toLowerCase().includes(query.toLowerCase())))) : [];
   const uniqueQuestions = ((d && d.ungrouped) || []).filter((q) =>
+    (!themeFilter || q.theme === themeFilter) &&
     q.text.toLowerCase().includes(query.toLowerCase()));
+
+  // Uniques grouped by theme (funnel sections), newest first within each;
+  // themes ordered by the strip's counts, un-themed and review items last
+  const parseDate = (s) => { const t = Date.parse(s); return isNaN(t) ? 0 : t; };
+  const themeOrder = (d && d.themes ? d.themes.map((t) => t.name) : []);
+  const uniqueSections = [];
+  {
+    const byTheme = new Map();
+    uniqueQuestions.forEach((q) => {
+      const key = q.needs_review ? 'Needs review' : (q.theme || 'Other');
+      if (!byTheme.has(key)) byTheme.set(key, []);
+      byTheme.get(key).push(q);
+    });
+    const keys = [...byTheme.keys()].sort((a, b) => {
+      const rank = (k) => k === 'Needs review' ? 1e9 : (k === 'Other' ? 1e8
+        : (themeOrder.indexOf(k) === -1 ? 1e7 : themeOrder.indexOf(k)));
+      return rank(a) - rank(b);
+    });
+    keys.forEach((key) => uniqueSections.push({
+      theme: key,
+      questions: byTheme.get(key).sort((a, b) => parseDate(b.date) - parseDate(a.date)),
+    }));
+  }
 
   const stat = (label, value, accent) => (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -231,12 +258,27 @@ function DashboardView({ onUpload }) {
         <Reveal delay={100}>
           <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: d.executiveSummary ? 16 : 32 }}>
             <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--text-helper)', marginRight: 4 }}>Themes</span>
-            {d.themes.map((t, i) => (
-              <span key={i} title={`${t.count} question${t.count === 1 ? '' : 's'} fall under this theme`}
-                style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, color: 'var(--text-secondary)', background: 'var(--gray-10)', padding: '6px 12px' }}>
-                {t.name} <b style={{ color: 'var(--blue-70)' }}>{t.count}</b>
-              </span>
-            ))}
+            {d.themes.map((t, i) => {
+              const active = themeFilter === t.name;
+              return (
+                <button key={i}
+                  title={active ? 'Click to clear this filter'
+                    : `Show only the ${t.count} question${t.count === 1 ? '' : 's'} under this theme`}
+                  onClick={() => { setThemeFilter(active ? null : t.name); setVisibleCount(PAGE_SIZE); }}
+                  style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, cursor: 'pointer',
+                    border: active ? '1px solid var(--blue-60)' : '1px solid transparent',
+                    color: active ? 'var(--blue-70)' : 'var(--text-secondary)',
+                    background: active ? '#edf5ff' : 'var(--gray-10)', padding: '6px 12px' }}>
+                  {t.name} <b style={{ color: 'var(--blue-70)' }}>{t.count}</b>
+                </button>
+              );
+            })}
+            {themeFilter ? (
+              <button onClick={() => setThemeFilter(null)}
+                style={{ fontFamily: 'var(--font-sans)', fontSize: 12, cursor: 'pointer', border: 'none', background: 'transparent', color: 'var(--text-helper)', textDecoration: 'underline' }}>
+                clear filter
+              </button>
+            ) : null}
           </div>
         </Reveal>
       ) : null}
@@ -290,7 +332,7 @@ function DashboardView({ onUpload }) {
             onRenameTopic={g.topicId ? (name) => renameTopic(g.topicId, name) : null}
             defaultOpen={i === 0 && !query} />
         ))}
-        {groups.length === 0 ? <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-helper)', borderBottom: '1px solid var(--border-subtle)' }}>No topics match “{query}”.</div> : null}
+        {groups.length === 0 ? <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-helper)', borderBottom: '1px solid var(--border-subtle)' }}>No topics match “{themeFilter || query}”.</div> : null}
       </div>
       {groups.length > visibleCount ? (
         <button onClick={() => setVisibleCount((v) => v + PAGE_SIZE)}
@@ -308,20 +350,40 @@ function DashboardView({ onUpload }) {
             </span>
             Unique questions ({uniqueQuestions.length}) — asked only once, kept in every export
           </button>
-          {showUnique ? (
-            <ul style={{ listStyle: 'none', margin: '12px 0 0', padding: 0, borderLeft: '1px solid var(--border-subtle)' }}>
-              {uniqueQuestions.map((q, i) => (
-                <li key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 16, padding: '8px 16px' }}>
-                  <span style={{ fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
-                    {q.theme ? <span title="Theme this question falls under" style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--text-helper)', background: 'var(--gray-10)', padding: '1px 7px', marginRight: 8, whiteSpace: 'nowrap' }}>{q.theme}</span> : null}
-                    {q.needs_review ? <span title="Didn't fit any known category — a recurring pile of these means a new category is being born" style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: '#8a6116', background: '#fcf4d6', padding: '1px 7px', marginRight: 8, whiteSpace: 'nowrap' }}>needs review</span> : null}
-                    {q.text}
-                  </span>
-                  {q.date && q.date !== 'Unknown' ? <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-placeholder)', whiteSpace: 'nowrap' }}>{q.date}</span> : null}
-                </li>
-              ))}
-            </ul>
-          ) : null}
+          {showUnique ? uniqueSections.map((section) => (
+            <div key={section.theme} style={{ margin: '14px 0 0' }}>
+              <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.04em', textTransform: 'uppercase', padding: '0 16px 6px', color: section.theme === 'Needs review' ? '#8a6116' : 'var(--text-helper)' }}
+                title={section.theme === 'Needs review' ? "Didn't fit any known category — a recurring pile of these means a new category is being born" : undefined}>
+                {section.theme} ({section.questions.length})
+              </div>
+              <ul style={{ listStyle: 'none', margin: 0, padding: 0, borderLeft: `2px solid ${section.theme === 'Needs review' ? '#f1c21b' : 'var(--border-subtle)'}` }}>
+                {section.questions.map((q, i) => {
+                  const key = `${section.theme}:${i}`;
+                  const open = openUnique === key;
+                  const hasOriginal = !!q.original_message;
+                  return (
+                    <li key={i} onClick={() => hasOriginal && setOpenUnique(open ? null : key)}
+                      title={hasOriginal && !open ? 'Click to see the original Slack message' : undefined}
+                      style={{ padding: '8px 16px', cursor: hasOriginal ? 'pointer' : 'default' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
+                        <span style={{ fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>{q.text}</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap' }}>
+                          {q.date && q.date !== 'Unknown' ? <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-placeholder)' }}>{q.date}</span> : null}
+                          {hasOriginal ? <span style={{ display: 'inline-flex', color: 'var(--text-placeholder)', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform var(--duration-base) var(--ease-productive)' }}><Icon name="chevron-down" size={12} /></span> : null}
+                        </span>
+                      </div>
+                      {open ? (
+                        <div style={{ margin: '7px 0 2px', padding: '8px 12px', background: 'var(--gray-10)', fontSize: 12.5, color: 'var(--text-helper)', lineHeight: 1.5 }}>
+                          <span style={{ fontWeight: 600, letterSpacing: '.03em', textTransform: 'uppercase', fontSize: 10.5, marginRight: 8 }}>Original message</span>
+                          {q.original_message}
+                        </div>
+                      ) : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )) : null}
         </div>
       ) : null}
     </div>

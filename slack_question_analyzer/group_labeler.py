@@ -260,6 +260,8 @@ SUMMARY_SYSTEM = (
     "rest of the questions were each asked once.\n"
     "- If several topics tie, say they are evenly spread rather than calling "
     "one dominant.\n"
+    "- If theme totals are provided, LEAD with the top theme(s) and their "
+    "exact counts, then the top topic.\n"
     "Example input: 'Total questions analyzed: 12' with topics 'Backups - 2', "
     "'Login Errors - 2'. Example output: {\"summary\": \"The 12 questions are "
     "evenly spread, led by Backups (2) and Login Errors (2).\"}\n"
@@ -307,6 +309,12 @@ EXTRACT_SYSTEM = (
     "- A message often contains MORE THAN ONE real question: output one entry "
     "per REAL question, repeating the message number. Implicit help requests "
     "count as REAL.\n"
+    "- Output each distinct ask ONCE. Never output two rewrites of the same "
+    "ask from one message (asking 'what is the error' and 'why does it fail' "
+    "about the same failure is ONE ask).\n"
+    "- Enumerated steps of a single workflow or task list ('1. Find the file "
+    "2. Move it 3. Merge them') are ONE question about whether the whole "
+    "workflow is possible — never one question per step.\n"
     "- Preserve technical tokens exactly as written: error strings, API "
     "names, product names, version numbers, file names. Never normalize, "
     "paraphrase, or invent them.\n"
@@ -320,15 +328,20 @@ EXTRACT_FEW_SHOT = """Example messages:
 0. Hi all! Quick one — can we trigger transfers via REST instead of the scheduler? Also is there a way to bulk-disable actions?
 1. Deployed the fix to prod this morning, all green.
 2. Re: wM MFT (SaaS), customer product feedback. They would like to 1. See a graphical representation of the Action log showing status of each task. 2. Is there a way to group Actions and filter by group name? Any thoughts?
+3. Can we configure the following tasks to do this? 1. Find file001.txt in folder 2. Find file002.txt in folder 3. Invoke Flow Service to merge the files
 
 Correct answer: {"questions": [
 {"index": 0, "question": "Can we trigger transfers via REST instead of the scheduler?"},
 {"index": 0, "question": "Is there a way to bulk-disable actions?"},
 {"index": 2, "question": "Can the wM MFT (SaaS) Action log show a graphical representation of each task's status?"},
-{"index": 2, "question": "Can Actions in wM MFT (SaaS) be grouped and filtered by group name?"}]}
+{"index": 2, "question": "Can Actions in wM MFT (SaaS) be grouped and filtered by group name?"},
+{"index": 3, "question": "Can tasks be configured to find file001.txt and file002.txt in a folder and merge them with a Flow Service?"}]}
 
 DO NOT answer message 2 like this: {"index": 2, "question": "They want to see the action log and group actions, any thoughts?"}
 Wrong because: 'Any thoughts?' is RHETORICAL and must be dropped; the two REAL questions must be split into two entries; 'they' must be made explicit using the CONTEXT sentence.
+
+DO NOT answer message 3 with three entries ("Find file001.txt in folder", "Find file002.txt in folder", "Invoke Flow Service to merge the files").
+Wrong because: those are steps of ONE workflow — the only ask is whether the workflow can be configured.
 
 Now extract from these messages."""
 
@@ -708,9 +721,14 @@ class GroupLabeler:
                     assigned[i - 1] = name
         return assigned if any(assigned) else None
 
-    def summarize_analysis(self, groups: List[Dict], total_questions: int) -> Optional[str]:
-        """Write a 2-3 sentence executive summary of the top question groups."""
-        lines = [f"Total questions analyzed: {total_questions}", 'Top question groups:']
+    def summarize_analysis(self, groups: List[Dict], total_questions: int,
+                           themes: Optional[List[Dict]] = None) -> Optional[str]:
+        """Write a 1-2 sentence executive summary of the top question groups."""
+        lines = [f"Total questions analyzed: {total_questions}"]
+        if themes:
+            lines.append('Theme totals (exact, deterministic counts): ' +
+                         ', '.join(f"{t['name']} - {t['count']}" for t in themes))
+        lines.append('Top question groups:')
         for i, group in enumerate(groups[:10], 1):
             topic = group.get('topic') or group['representative_question']
             lines.append(f"{i}. {topic} — asked {group['count']} times "
