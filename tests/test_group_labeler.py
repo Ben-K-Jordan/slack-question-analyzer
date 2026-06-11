@@ -828,7 +828,7 @@ def test_rephrased_same_ask_consolidated(monkeypatch):
 
     stub_llm(monkeypatch, analyzer,
              label_group=lambda texts, keywords=None: None,
-             verify_same_topic=lambda a, b: None,
+             verify_same_topic=lambda a, b: True,  # judge 2 agrees: same ask
              extract_questions=extract,
              consolidate_same_ask=lambda msg, texts: [1],  # one distinct ask
              summarize_analysis=lambda groups, total, themes=None: None)
@@ -889,7 +889,6 @@ def test_consolidate_same_ask_parses_and_counts(monkeypatch):
     patch_chat(monkeypatch, ['{"keep": [1]}'])
     keep = labeler.consolidate_same_ask('msg', ['a?', 'b rephrased?'])
     assert keep == [1]
-    assert labeler.stats.get('same_ask_collapsed') == 1
 
     patch_chat(monkeypatch, ['{"keep": []}'])
     assert labeler.consolidate_same_ask('msg2', ['c?', 'd?']) is None  # not meaningful
@@ -915,3 +914,95 @@ def test_confirm_feature_request_receives_original_message(monkeypatch):
     user = captured[0]['body']['messages'][1]['content']
     assert 'would be great to see a heat-map' in user
     assert 'wish-phrasing' in captured[0]['body']['messages'][0]['content']
+
+
+# ---- Fixture-2 round 3: split-halves must survive ----
+
+def test_consolidation_drop_needs_verifier_agreement(monkeypatch):
+    """Two-judge rule for consolidation: the consolidator nominated dropping
+    the maintenance-window half of a genuine two-part message; the verifier
+    says it's a DIFFERENT ask, so it stays."""
+    monkeypatch.setenv('LLM_EXTRACTION', 'full')
+    vectors = {
+        'can we restrict which ip ranges a partner can connect from?': [1.0, 0.0],
+        'is there a way to run a transfer only during a maintenance window?': [0.0, 1.0],
+    }
+    analyzer = make_analyzer(monkeypatch, vectors=vectors, label_groups=True)
+
+    def extract(texts, thorough=False):
+        out = []
+        for i, t in enumerate(texts):
+            if 'IP ranges' in t or 'ip ranges' in t.lower():
+                out.append({'index': i, 'question': 'Can we restrict which IP ranges a partner can connect from?'})
+                out.append({'index': i, 'question': 'Is there a way to run a transfer only during a maintenance window?'})
+        return out
+
+    stub_llm(monkeypatch, analyzer,
+             label_group=lambda texts, keywords=None: None,
+             verify_same_topic=lambda a, b: False,  # judge 2: distinct asks
+             extract_questions=extract,
+             consolidate_same_ask=lambda msg, texts: [1],  # judge 1 over-collapses
+             summarize_analysis=lambda groups, total, themes=None: None)
+
+    results = analyzer.analyze_slack_content(
+        "2024-06-05\nCan we restrict which IP ranges a partner connects from? "
+        "And separately, can a transfer run only during a maintenance window?\n")
+    assert results['total_questions'] == 2  # second half survived
+
+
+def test_consolidation_drop_proceeds_when_judges_agree(monkeypatch):
+    monkeypatch.setenv('LLM_EXTRACTION', 'full')
+    vectors = {'could the scheduler be running in the wrong timezone after dst?': [1.0, 0.0]}
+    analyzer = make_analyzer(monkeypatch, vectors=vectors, label_groups=True)
+
+    def extract(texts, thorough=False):
+        return [
+            {'index': 0, 'question': 'Could the scheduler be running in the wrong timezone after DST?'},
+            {'index': 0, 'question': 'Is the transfers-stopping-after-DST issue timezone-related?'},
+        ]
+
+    stub_llm(monkeypatch, analyzer,
+             label_group=lambda texts, keywords=None: None,
+             verify_same_topic=lambda a, b: True,  # judge 2 agrees: same ask
+             extract_questions=extract,
+             consolidate_same_ask=lambda msg, texts: [1],
+             summarize_analysis=lambda groups, total, themes=None: None)
+
+    results = analyzer.analyze_slack_content(
+        "2024-06-04\nScheduled transfers stop after DST. Could the scheduler "
+        "be in the wrong timezone after DST changes?\n")
+    assert results['total_questions'] == 1
+
+
+def test_under_extraction_recovered_by_widened_safety_net(monkeypatch):
+    """A message with TWO regex-visible questions that produced only ONE
+    extraction gets the quality-model second look — the missing half is
+    recovered instead of vanishing invisibly."""
+    monkeypatch.setenv('LLM_EXTRACTION', 'full')
+    vectors = {
+        'does mft support mutual tls for https partner endpoints?': [1.0, 0.0],
+        'can mft post a transfer-complete event to an external kafka topic?': [0.0, 1.0],
+    }
+    analyzer = make_analyzer(monkeypatch, vectors=vectors, label_groups=True)
+
+    def extract(texts, thorough=False):
+        out = []
+        for i, t in enumerate(texts):
+            if 'mutual TLS' in t:
+                out.append({'index': i, 'question': 'Does MFT support mutual TLS for HTTPS partner endpoints?'})
+                if thorough:  # the 8B sees the second ask the 3B missed
+                    out.append({'index': i, 'question': 'Can MFT post a transfer-complete event to an external Kafka topic?'})
+        return out
+
+    stub_llm(monkeypatch, analyzer,
+             label_group=lambda texts, keywords=None: None,
+             verify_same_topic=lambda a, b: False,
+             extract_questions=extract,
+             summarize_analysis=lambda groups, total, themes=None: None)
+
+    results = analyzer.analyze_slack_content(
+        "2024-06-06\nDoes MFT support mutual TLS for HTTPS partner endpoints? "
+        "Also, can it post a transfer-complete event to an external Kafka topic?\n")
+    texts = [q['text'] for q in results['ungrouped_questions']]
+    assert results['total_questions'] == 2
+    assert any('Kafka' in t for t in texts)  # the lost half came back

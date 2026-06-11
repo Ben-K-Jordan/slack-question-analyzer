@@ -845,8 +845,6 @@ class GroupLabeler:
                        if isinstance(i, int) and 1 <= i <= len(question_texts)})
         if not keep:
             return None  # "keep nothing" is not a meaningful verdict
-        if len(keep) < len(question_texts):
-            self._count('same_ask_collapsed', len(question_texts) - len(keep))
         return keep
 
     def confirm_feature_request(self, question: str,
