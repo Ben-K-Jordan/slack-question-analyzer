@@ -564,6 +564,61 @@ def test_safety_net_recovers_batch_the_fast_model_skipped(monkeypatch):
     assert results['ungrouped_questions'][0]['text'] == 'How do I configure IWHI monitoring?'
 
 
+def test_safety_net_rechecks_wordy_messages_with_no_regex_questions(monkeypatch):
+    """Eval round 2: implicit help requests ('been stuck all morning, UI
+    spins on login') and relayed wishes have NO regex-visible question, so
+    the fewer-than-regex check never fired for them — three feedback
+    messages and one implicit ask vanished. Any wordy message that produced
+    zero asks now gets the quality-model second look."""
+    monkeypatch.setenv('LLM_EXTRACTION', 'full')
+    vectors = {'why does the web ui spin forever on login for one user?': [1.0, 0.0]}
+    analyzer = make_analyzer(monkeypatch, vectors=vectors, label_groups=True)
+
+    message = ('Been stuck on this all morning. For one customer the web UI '
+               'just spins on login and never loads. Out of ideas.')
+
+    def extract(texts, thorough=False):
+        if thorough and any('spins on login' in t for t in texts):
+            return [{'index': 0, 'question':
+                     'Why does the web UI spin forever on login for one user?',
+                     'type': 'troubleshooting'}]
+        return []  # fast model: "no questions here" (wrong)
+
+    stub_llm(monkeypatch, analyzer,
+             label_group=lambda texts, keywords=None: None,
+             verify_same_topic=lambda a, b: None,
+             extract_questions=extract,
+             summarize_analysis=lambda groups, total, themes=None: None)
+
+    results = analyzer.analyze_slack_content('2024-01-05\n' + message + '\n')
+    assert results['total_questions'] == 1
+    assert 'login' in results['ungrouped_questions'][0]['text'].lower()
+
+
+def test_safety_net_skips_terse_no_question_messages(monkeypatch):
+    """The zero-question recheck only fires for wordy prose — a short
+    status line ('Deployed the fix, all green.') stays cheap: no thorough
+    call, no questions."""
+    monkeypatch.setenv('LLM_EXTRACTION', 'full')
+    analyzer = make_analyzer(monkeypatch, vectors={}, label_groups=True)
+    thorough_calls = []
+
+    def extract(texts, thorough=False):
+        if thorough:
+            thorough_calls.append(texts)
+        return []
+
+    stub_llm(monkeypatch, analyzer,
+             label_group=lambda texts, keywords=None: None,
+             verify_same_topic=lambda a, b: None,
+             extract_questions=extract,
+             summarize_analysis=lambda groups, total, themes=None: None)
+
+    results = analyzer.analyze_slack_content('2024-01-05\nDeployed the fix, all green.\n')
+    assert results['total_questions'] == 0
+    assert thorough_calls == []
+
+
 def test_safety_net_falls_back_to_regex_when_both_models_skip(monkeypatch):
     monkeypatch.setenv('LLM_EXTRACTION', 'full')
     vectors = {'how do i configure iwhi monitoring?': [1.0, 0.0]}

@@ -34,7 +34,7 @@
       "maintenance window",
       "mutual tls",
       "kafka",
-      "deactivate|disable many",
+      "deactivat|bulk.disable|disable (many|multiple|several|a set|scheduled)",
       "0 bytes|empty",
       "ibm mq",
       "reject|malformed"

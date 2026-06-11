@@ -1,6 +1,16 @@
-# The Question Funnel — Pipeline Spec (v2.26, prompt pack 9, taxonomy v2)
+# The Question Funnel — Pipeline Spec (v2.27, prompt pack 10, taxonomy v3)
 
 > Deltas since the prompts/stages quoted below were written:
+> - Eval round 2: same-source occurrences inside a group are EJECTED to
+>   their own singleton row, never deleted (a wrong eject = one extra
+>   unique; a wrong delete = a silent drop). The extraction REAL
+>   definition now includes capability wishes (tag feature-request) and
+>   stuck-problems; the safety net also re-checks any wordy message that
+>   produced ZERO asks with the quality model (regex can't see implicit
+>   asks, so the fewer-than-regex trigger never fired for them).
+>   Taxonomy v3: partner onboarding/provisioning language moved to
+>   Install, Upgrade & Admin so setup questions stop sharing a bucket
+>   with host-key/credential questions.
 > - Prompt pack 9 (first eval round across all 4 transcript fixtures):
 >   extraction gains the or-alternative rule (an 'Or...?' offering another
 >   route to the same goal is ONE ask) and the explicit multi-part rule
