@@ -199,7 +199,7 @@ FEEDBACK_SYSTEM = (
 
 # Prompt pack version: stamped into results metadata so drift is traceable
 # (the LLM cache keys on full prompt text, so bumps also invalidate caches)
-PROMPT_PACK_VERSION = 19
+PROMPT_PACK_VERSION = 20
 
 LABEL_SYSTEM = (
     "If the group is empty, malformed, or too mixed to share one honest "
@@ -347,6 +347,10 @@ ROUTE_SYSTEM = (
     "never file it under the nearest operational category just because it "
     "mentions transfers or files. A growing 0-pile tells the team a "
     "category is missing; a forced fit hides that signal.\n"
+    "Example: 'Can the AI assistant build a whole workflow from a "
+    "plain-English description?' where no category mentions AI or "
+    "assistants — the SUBJECT is the assistant, not the workflow: "
+    "{\"category\": 0}.\n"
     "Never invent a number. Never explain.\n"
     "Respond with JSON only: {\"category\": <number>}"
 )

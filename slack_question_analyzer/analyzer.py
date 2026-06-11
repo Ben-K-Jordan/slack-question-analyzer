@@ -861,8 +861,13 @@ class QuestionAnalyzer:
     # same-cluster second row is a rephrase. This is the deterministic line
     # between the T6-class (eject: real distinct asks wrongly merged) and
     # the rephrase class (drop: 'I mean...' variants the judges leaked).
+    # Digit enumeration must appear in enumeration POSITION (message start
+    # or after a colon/semicolon): a bare \d[.)] matched '(test set 2)' in a
+    # transcript header glued to the first message, faking an asker-declared
+    # multi-ask split for every question in that message
     _ENUMERATED_ASKS_RE = re.compile(
-        r'\b\d{1,2}[.)]\s|and,? separately|two (unrelated )?(questions|things)'
+        r'(?:^|[:;]\s)\s*\d{1,2}[.)]\s|and,? separately'
+        r'|two (unrelated )?(questions|things)'
         r'|couple of (questions|things)|second question', re.IGNORECASE)
 
     def _collapse_same_source_occurrences(self, groups: List[Dict]) -> None:

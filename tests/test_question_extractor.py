@@ -202,3 +202,22 @@ def test_and_separately_splits_compound_questions():
     assert len(questions) == 2
     assert any('mutual TLS' in q for q in questions)
     assert any('Kafka' in q for q in questions)
+
+
+def test_document_title_stripped_from_first_block():
+    """A title line before the FIRST date header is file furniture: glued
+    onto the first message it inflated the source past its 200-char
+    identity cap and '(test set 2)' even faked an enumerated multi-ask
+    split. Blocks without any date keep all their lines."""
+    extractor = QuestionExtractor()
+    content = ('MFT Content from the Slack threads (synthetic test set 2)\n'
+               'June 9, 2026\n\n'
+               'How do I set up a retry policy for failed transfers?\n'
+               '-----------------------------------------------------------\n'
+               'June 8, 2026\n\nSecond message?\n')
+    messages = extractor.extract_messages(content)
+    assert messages[0]['text'] == 'How do I set up a retry policy for failed transfers?'
+    assert messages[0]['date'] == 'June 9, 2026'
+    # A dateless snippet is NOT furniture
+    assert extractor.extract_messages('no date here, just a question?\n')[0][
+        'text'] == 'no date here, just a question?'

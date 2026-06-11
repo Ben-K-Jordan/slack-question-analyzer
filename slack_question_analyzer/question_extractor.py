@@ -367,7 +367,7 @@ class QuestionExtractor:
 
         messages = []
 
-        for block in blocks:
+        for block_index, block in enumerate(blocks):
             block = block.strip()
             if not block:
                 continue
@@ -378,6 +378,7 @@ class QuestionExtractor:
             text_lines = []
             replies = []
             in_reply = False
+            pre_date_lines = 0  # title furniture before the FIRST date line
 
             for line in lines:
                 line = line.strip()
@@ -407,7 +408,16 @@ class QuestionExtractor:
                         date = found
                         if pure_date_line:
                             continue
+                    else:
+                        pre_date_lines = len(text_lines) + 1
                 text_lines.append(line)
+
+            # A document title before the FIRST block's date line is file
+            # furniture, not message content (same class as '# ' comments).
+            # Glued onto the first message it inflates the source past its
+            # identity cap and can fake enumeration ('...test set 2)').
+            if block_index == 0 and date and pre_date_lines:
+                text_lines = text_lines[pre_date_lines:]
 
             if text_lines:
                 # Newline-join: each source line stays its own sentence
