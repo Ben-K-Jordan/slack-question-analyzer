@@ -256,7 +256,11 @@ class QuestionAnalyzer:
         single_questions = [g for g in groups if g['count'] == 1]
 
         result = {
-            'total_questions': len(questions),
+            # Derived from rendered rows, never counted earlier: the exit
+            # invariant can collapse occurrences inside groups AFTER the
+            # question list was built, and a total the page can't prove
+            # with rows is the same lie as a 2x with empty slots
+            'total_questions': sum(g['count'] for g in groups),
             'total_groups': len(multi_question_groups),
             'groups': multi_question_groups,
             'ungrouped_questions': [q['questions'][0] for q in single_questions],
