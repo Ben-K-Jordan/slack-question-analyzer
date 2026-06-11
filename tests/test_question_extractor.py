@@ -104,3 +104,19 @@ def test_multiline_message_keeps_sentences_apart():
     }])
     assert len(questions) == 1
     assert questions[0]['text'] == 'How do I configure alerts?'
+
+
+def test_abbreviations_do_not_split_sentences():
+    """Fixture-2 regression: the splitter tore 'maintenance window, e.g.
+    1am to 4am?' into fragments at the 'e.g.' period."""
+    from slack_question_analyzer.question_extractor import QuestionExtractor
+    extractor = QuestionExtractor()
+    questions = extractor.extract_questions(
+        'Is there a way to set a transfer to only run during a maintenance '
+        'window, e.g. 1am to 4am?')
+    assert questions == ['Is there a way to set a transfer to only run '
+                         'during a maintenance window, e.g. 1am to 4am?']
+
+    questions = extractor.extract_questions(
+        'Can we whitelist protocols, i.e. SFTP and FTPS only?')
+    assert len(questions) == 1 and 'i.e. SFTP' in questions[0]
