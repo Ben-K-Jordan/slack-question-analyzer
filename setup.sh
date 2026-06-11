@@ -51,7 +51,7 @@ fi
 if [ "$ram_gb" -ge 12 ]; then
     chat_model="llama3.1:8b"
     echo "Detected ${ram_gb}GB RAM - using the larger chat model for better topic names."
-    echo "Downloading models (first time only: ~270MB + ~5GB)..."
+    echo "Downloading models (first time only: ~270MB + ~5GB + ~2GB)..."
 else
     chat_model="llama3.2"
     echo "Detected ${ram_gb}GB RAM - using the compact chat model."
@@ -59,6 +59,11 @@ else
 fi
 ollama pull nomic-embed-text
 ollama pull "$chat_model"
+if [ "$chat_model" != "llama3.2" ]; then
+    # The fast model: token-heavy extraction on large transcripts goes to
+    # the 3B while the 8B handles the judgment calls
+    ollama pull llama3.2
+fi
 echo "[OK] Models ready"
 
 # 5. Launch — the dashboard opens in your browser automatically
