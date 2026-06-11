@@ -93,6 +93,12 @@ class QuestionExtractor:
             lambda m: m.group(0).replace('.', self._DOT_SENTINEL), text)
         protected = re.sub(r'(?<=\d)\.(?=\d)', self._DOT_SENTINEL, protected)
 
+        # An explicit coordination marker joins two DISTINCT asks in one
+        # sentence ("does X support TLS, and separately, can it post to
+        # Kafka?") — break it so each part is seen as its own candidate
+        protected = re.sub(r',?\s+and,?\s+separately,?\s+', '\n', protected,
+                           flags=re.IGNORECASE)
+
         # Split into sentences, keeping the trailing '?' so it can be detected.
         # Newlines are sentence boundaries: a header or greeting on its own
         # line must never get glued onto the next line's question.
