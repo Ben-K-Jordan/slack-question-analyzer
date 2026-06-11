@@ -138,17 +138,31 @@ class QuestionAnalyzer:
             questions = self.extractor.questions_from_messages(messages)
         questions = self._collapse_same_message_rephrasings(questions)
         questions = self._enforce_date_integrity(questions)
+        questions = self._consolidate_same_ask(questions)
 
         # The type axis pays off here: feature requests are product feedback,
         # not support questions a doc page resolves — they leave the support
-        # funnel entirely and get their own list
-        feature_requests = [q for q in questions
-                            if q.get('qtype') == 'feature-request']
+        # funnel entirely. The extractor's tag alone isn't trusted: the
+        # quality model confirms, or the question stays in support (the
+        # safer home — a misrouted support question is invisible to support,
+        # while a feature request among support questions is merely noise)
+        confirm = (self.labeler.confirm_feature_request
+                   if self.labeler is not None and self._llm_enabled('auto')
+                   else None)
+        feature_requests, kept = [], []
+        for q in questions:
+            if (q.get('qtype') == 'feature-request'
+                    and (confirm is None or confirm(q['text']) is True)):
+                feature_requests.append(q)
+            else:
+                if q.get('qtype') == 'feature-request':
+                    logger.info("Kept in support (feature-request tag not "
+                                "confirmed): %.80r", q['text'])
+                kept.append(q)
+        questions = kept
         if feature_requests:
-            questions = [q for q in questions
-                         if q.get('qtype') != 'feature-request']
-            logger.info("Routed %d feature request(s) out of the support "
-                        "funnel to product feedback", len(feature_requests))
+            logger.info("Routed %d confirmed feature request(s) out of the "
+                        "support funnel to product feedback", len(feature_requests))
         logger.info("Found %d questions", len(questions))
         report('extracting', 1, 1)
 
@@ -347,6 +361,43 @@ class QuestionAnalyzer:
         if self.labeler is not None:
             self.labeler._count('extract_dropped_unsupported')
         return None
+
+    def _consolidate_same_ask(self, questions: List[Dict]) -> List[Dict]:
+        """
+        Lexical collapse catches near-verbatim restatement; this catches
+        REPHRASED restatement: a message whose one ask was extracted as two
+        differently-worded questions ("wrong timezone after DST?" / "is the
+        DST issue timezone-related?"). For every message that produced 2+
+        questions, the quality model picks the distinct asks (closed choice,
+        abstain = keep all).
+        """
+        if self.labeler is None or not self._llm_enabled('auto'):
+            return questions
+        cap = int(os.getenv('LLM_CONSOLIDATE_MAX', '15'))
+        calls = 0
+
+        by_message: Dict[str, List[int]] = {}
+        for i, q in enumerate(questions):
+            by_message.setdefault(q.get('original_message') or '', []).append(i)
+
+        drop = set()
+        for source, indices in by_message.items():
+            if len(indices) < 2 or calls >= cap or not source:
+                continue
+            calls += 1
+            keep = self.labeler.consolidate_same_ask(
+                source, [questions[i]['text'] for i in indices])
+            if keep is None:
+                continue
+            keep_set = {indices[k - 1] for k in keep}
+            for i in indices:
+                if i not in keep_set:
+                    logger.info("Consolidated a same-ask rewrite: %.80r",
+                                questions[i]['text'])
+                    drop.add(i)
+        if drop:
+            return [q for i, q in enumerate(questions) if i not in drop]
+        return questions
 
     def _enforce_date_integrity(self, questions: List[Dict]) -> List[Dict]:
         """
