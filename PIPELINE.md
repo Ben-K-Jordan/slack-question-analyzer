@@ -1,6 +1,18 @@
-# The Question Funnel — Pipeline Spec (v2.38, prompt pack 18, taxonomy v3)
+# The Question Funnel — Pipeline Spec (v2.39, prompt pack 19, taxonomy v3)
 
 > Deltas since the prompts/stages quoted below were written:
+> - Eval round 13 (first group-then-route run; reorder VALIDATED:
+>   fixture 7 hit its counts/ranking/precedence wins, fixtures 4/5/6
+>   stayed perfect): the predicted cost appeared as cross-category
+>   borderline merges the bucket walls used to block, all wearing the
+>   audit-flagged-verifier-overruled signature. ROUTING IS NOW THE THIRD
+>   JUDGE: a member the audit nominated and the verifier kept (judges
+>   1-1) is split out when it and its group CONFIDENTLY route to
+>   different buckets. ROUTE abstains on new-CAPABILITY areas no
+>   category describes (not just off-topic tools). Wish + the asker's
+>   own impossibility statement ('doesn't look possible today') diverts
+>   to feedback deterministically. Eval failures now print row sources
+>   and the full provenance trail.
 > - Eval round 12 / fixture 7 (volume + ranking + emerging topic) — THE
 >   REORDER: grouping now runs GLOBALLY FIRST, and each resulting
 >   CLUSTER is routed to a bucket by its representative (Stage 1 and

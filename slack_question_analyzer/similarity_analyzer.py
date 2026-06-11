@@ -794,6 +794,11 @@ class SimilarityAnalyzer:
                                 logger.info("Audit eviction overruled by the "
                                             "verifier (same topic): %.80r",
                                             buckets[idx][0]['text'])
+                                # Judges tied 1-1 on this member: leave a
+                                # mark so routing can act as the third
+                                # judge downstream (internal, stripped
+                                # before results render)
+                                buckets[idx][0]['_audit_flagged'] = True
                                 continue
                         evicted.add(idx)
                         logger.info("AI evicted an outlier from a group "

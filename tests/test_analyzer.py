@@ -595,3 +595,44 @@ def test_topic_label_must_be_grounded_in_member_text(analyzer):
     assert analyzer._topic_grounded('Failure Alerts', group)
     assert not analyzer._topic_grounded('Transfer Retries', group)
     assert not analyzer._topic_grounded('', group)
+
+
+def test_routing_tiebreak_splits_contested_cross_category_member(analyzer, monkeypatch):
+    """Third-judge rule: audit said different (1), verifier said same (1) —
+    confident routing disagreement breaks the tie and splits the member.
+    Same-category disagreement or unconfident routes leave the group alone."""
+    vectors = {
+        'how do we enforce host key verification?': [1.0, 0.0, 0.0],
+        'how do we onboard a new vendor end to end?': [0.0, 1.0, 0.0],
+    }
+    monkeypatch.setattr(analyzer.similarity_analyzer, 'get_embeddings_batch',
+                        lambda texts, progress_callback=None: np.array(
+                            [vectors[t] for t in texts]))
+    anchors = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+
+    def q(text, flagged=False):
+        d = {'text': text, 'normalized_text': text.lower(),
+             'original_message': text}
+        if flagged:
+            d['_audit_flagged'] = True
+        return d
+
+    contested = q('How do we onboard a new vendor end to end?', flagged=True)
+    group = {'representative_question': 'How do we enforce host key verification?',
+             'questions': [q('How do we enforce host key verification?'),
+                           contested],
+             'count': 2, 'avg_similarity': 0.82}
+    out = analyzer._routing_tiebreak([group], anchors)
+    counts = sorted(g['count'] for g in out)
+    assert counts == [1, 1]              # contested member split out
+    assert '_audit_flagged' not in contested  # internal flag never leaks
+
+    # Same category on both sides: the tie stands, group survives intact
+    vectors['how do we onboard a new vendor end to end?'] = [0.95, 0.2, 0.0]
+    contested2 = q('How do we onboard a new vendor end to end?', flagged=True)
+    group2 = {'representative_question': 'How do we enforce host key verification?',
+              'questions': [q('How do we enforce host key verification?'),
+                            contested2],
+              'count': 2, 'avg_similarity': 0.82}
+    out2 = analyzer._routing_tiebreak([group2], anchors)
+    assert [g['count'] for g in out2] == [2]
