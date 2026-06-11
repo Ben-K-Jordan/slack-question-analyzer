@@ -162,18 +162,6 @@ function AreaChart({ data, labels, width = 720, height = 240, accent = 'var(--bl
   );
 }
 
-// ▲18% / ▼6% delta chip.
-function DeltaBadge({ value, size = 'md' }) {
-  const up = value >= 0;
-  const big = size === 'lg';
-  return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: up ? 'var(--green-60)' : 'var(--red-60)', fontFamily: 'var(--font-mono)', fontSize: big ? 18 : 13, fontWeight: 500 }}>
-      <Icon name={up ? 'trending-up' : 'trending-down'} size={big ? 18 : 14} />
-      {up ? '+' : ''}{value}%
-    </span>
-  );
-}
-
 // NEW / ▲2 / ▼1 movement marker.
 function MovementBadge({ movement }) {
   if (movement === 'new') {
@@ -188,4 +176,4 @@ function MovementBadge({ movement }) {
   return <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-placeholder)' }}>—</span>;
 }
 
-Object.assign(window, { useCountUp, CountUp, Reveal, Bar, AreaChart, DeltaBadge, MovementBadge });
+Object.assign(window, { useCountUp, CountUp, Reveal, Bar, AreaChart, MovementBadge });

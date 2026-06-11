@@ -438,7 +438,6 @@ of a full n×n similarity matrix, and the dashboard paginates long topic lists.
 | `/api/analyses/<id>` | DELETE | Delete a saved analysis |
 | `/api/analyses/<id>/export` | GET | Download as `?format=md`, `csv`, or `json` |
 | `/api/analyses/latest/weekly` | GET | Week-in-Review stats for the most recent analysis |
-| `/api/analyses/<id>/weekly` | GET | Week-in-Review stats for a specific analysis |
 | `/api/topics` | GET | The learned topic bank (topics accumulated across analyses) |
 | `/api/models/pull` | POST | Download a missing Ollama model (`{"model": "..."}`); progress at `GET /api/models/pull/<model>` |
 | `/api/config` | GET | Current provider/threshold configuration |
