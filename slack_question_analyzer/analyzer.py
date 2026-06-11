@@ -3,6 +3,7 @@ Main analyzer module that orchestrates question extraction, grouping, and rankin
 """
 
 import os
+import re
 import json
 import math
 import logging
@@ -133,6 +134,7 @@ class QuestionAnalyzer:
             did_full = True
         else:
             questions = self.extractor.questions_from_messages(messages)
+        questions = self._collapse_same_message_rephrasings(questions)
         logger.info("Found %d questions", len(questions))
         report('extracting', 1, 1)
 
@@ -225,13 +227,53 @@ class QuestionAnalyzer:
             report('summarizing', 0, 1)
             logger.info("Generating executive summary...")
             result['executive_summary'] = self.labeler.summarize_analysis(
-                multi_question_groups, len(questions))
+                multi_question_groups, len(questions), themes=result.get('themes'))
             report('summarizing', 1, 1)
         else:
             result['executive_summary'] = None
 
         report('complete', 1, 1)
         return result
+
+    @staticmethod
+    def _collapse_same_message_rephrasings(questions: List[Dict]) -> List[Dict]:
+        """
+        Two extractions of the same ask from ONE message are one question,
+        not an 'asked 2x' topic. The extractor sometimes rewrites a single
+        complaint from two angles ('What is the antivirus scanning error...?'
+        / 'Why does the Copy Task fail due to an antivirus scanning error?');
+        within one message, a moderate content-word overlap means same ask.
+        Distinct multi-questions in a message (REST triggers vs bulk-disable)
+        share almost no content words and are kept.
+        """
+        threshold = float(os.getenv('SAME_MESSAGE_REPHRASE_OVERLAP', '0.5'))
+
+        def tokens(q):
+            return set(re.findall(r'[a-z0-9]+', q['normalized_text'].lower()))
+
+        kept: List[Dict] = []
+        by_message: Dict[str, List[Dict]] = {}
+        for q in questions:
+            source = q.get('original_message') or ''
+            toks = tokens(q)
+            duplicate = False
+            for seen in by_message.get(source, []):
+                # IDENTICAL text is a genuine repeat (someone asked the exact
+                # question again) — occurrence counting handles it. Only a
+                # DIFFERENT rewrite with heavy overlap is a rephrasing.
+                if seen['norm'] == q['normalized_text']:
+                    continue
+                overlap = len(toks & seen['tokens']) / max(1, min(len(toks), len(seen['tokens'])))
+                if overlap >= threshold:
+                    duplicate = True
+                    break
+            if duplicate:
+                logger.info("Collapsed a same-message rephrasing: %.80r", q['text'])
+                continue
+            by_message.setdefault(source, []).append(
+                {'norm': q['normalized_text'], 'tokens': toks})
+            kept.append(q)
+        return kept
 
     def _extract_questions_llm(self, messages: List[Dict], report) -> List[Dict]:
         """
