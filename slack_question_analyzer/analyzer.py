@@ -560,9 +560,22 @@ class QuestionAnalyzer:
             if source.count('?') > 1 or self._ENUMERATED_ASKS_RE.search(source):
                 continue
 
+            # The lone '?' marks the asker's ACTUAL question: the survivor
+            # must be the rewrite of THAT sentence, not of the surrounding
+            # context (both can be verbatim-supported by the whole message,
+            # and 'why are transfers timing out' once outranked 'how do I
+            # increase the timeout' purely on length)
+            ask_sentence = source
+            qmark = source.find('?')
+            if qmark != -1:
+                start = max(source.rfind('.', 0, qmark),
+                            source.rfind('!', 0, qmark))
+                ask_sentence = source[start + 1:qmark + 1].strip() or source
+
             def rank(q):
-                support = self._source_support(q['normalized_text'], source)
-                return (support, len(q.get('text') or ''))
+                return (self._source_support(q['normalized_text'], ask_sentence),
+                        self._source_support(q['normalized_text'], source),
+                        len(q.get('text') or ''))
 
             best_norm = max(qs, key=rank)['normalized_text']
             for q in qs:

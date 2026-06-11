@@ -530,3 +530,23 @@ def test_single_ask_cap_on_unenumerated_single_question_mark_message(analyzer):
     long_source = ('x' * 199 + 'y')[:200]
     pair = [q('First ask?', long_source), q('Second ask?', long_source)]
     assert len(analyzer._enforce_single_ask_cap(pair)) == 2
+
+
+def test_single_ask_cap_keeps_the_question_sentence_rewrite(analyzer):
+    """The lone '?' marks the asker's actual question: when both candidates
+    are verbatim-supported by the whole message, the survivor must rewrite
+    the '?'-sentence, not the surrounding context."""
+    source = ('How do I increase the SFTP connection timeout? The customer '
+              'large transfers keep timing out before they finish.')
+
+    def q(text):
+        return {'text': text, 'normalized_text': text.lower(),
+                'original_message': source}
+
+    questions = [
+        q('Why are the customer large transfers timing out before they finish?'),
+        q('How do I increase the SFTP connection timeout?'),
+    ]
+    kept = analyzer._enforce_single_ask_cap(questions)
+    assert len(kept) == 1
+    assert 'increase the SFTP connection timeout' in kept[0]['text']
