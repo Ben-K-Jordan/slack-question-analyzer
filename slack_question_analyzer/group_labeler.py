@@ -124,7 +124,7 @@ ANSWERED_SCHEMA = {
 
 # Prompt pack version: stamped into results metadata so drift is traceable
 # (the LLM cache keys on full prompt text, so bumps also invalidate caches)
-PROMPT_PACK_VERSION = 5
+PROMPT_PACK_VERSION = 6
 
 LABEL_SYSTEM = (
     "If the group is empty, malformed, or too mixed to share one honest "
@@ -218,7 +218,11 @@ AUDIT_SYSTEM = (
     "{\"outliers\": [1]}\n"
     "Example: 1. Any good examples of using e2e monitoring? 2. How are real "
     "clients using monitoring/alerting? Same subject, different wording: "
-    "{\"outliers\": []}\n\n"
+    "{\"outliers\": []}\n"
+    "Example: 1. What is the best way to merge the content of two files? "
+    "2. Can a control file trigger a transfer when it appears? Both mention "
+    "files, but merging contents and trigger-on-control-file are different "
+    "operations with different doc pages: {\"outliers\": [2]}\n\n"
     "Respond with JSON only."
 )
 

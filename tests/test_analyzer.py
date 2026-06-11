@@ -177,3 +177,26 @@ def test_same_message_rephrasings_collapse(analyzer):
     assert 'Why does the Copy Task to Target System fail due to an antivirus scanning error?' not in texts
     assert texts.count('What is the antivirus scanning error when copying to Target System?') == 2
 
+
+def test_date_collision_phantom_dropped(analyzer):
+    """Invariant: identical text on two dates is illegal unless each copy's
+    own source contains it. The backfilled phantom dies; the genuine copy
+    and genuine cross-date repeats survive."""
+    def q(text, date, source):
+        return {'text': text, 'normalized_text': text.lower(), 'date': date,
+                'original_message': source}
+
+    custom = 'Can we get a custom error that the script can return?'
+    metering = 'How can users check their own transaction statistics?'
+    questions = [
+        q(custom, 'June 2, 2026', custom),            # genuine: source contains it
+        q(custom, 'May 30, 2026', metering),          # phantom: source is a metering msg
+        q(metering, 'May 30, 2026', metering),        # genuine
+        # genuine cross-date repeat: both sources contain the text
+        q('How do I reset my password?', 'June 1, 2026', 'How do I reset my password?'),
+        q('How do I reset my password?', 'June 3, 2026', 'How do I reset my password?'),
+    ]
+    kept = analyzer._enforce_date_integrity(questions)
+    dates_for_custom = [k['date'] for k in kept if k['text'] == custom]
+    assert dates_for_custom == ['June 2, 2026']  # phantom May 30 copy dropped
+    assert sum(1 for k in kept if 'password' in k['text']) == 2  # repeats kept

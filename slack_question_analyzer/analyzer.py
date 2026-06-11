@@ -137,6 +137,7 @@ class QuestionAnalyzer:
         else:
             questions = self.extractor.questions_from_messages(messages)
         questions = self._collapse_same_message_rephrasings(questions)
+        questions = self._enforce_date_integrity(questions)
 
         # The type axis pays off here: feature requests are product feedback,
         # not support questions a doc page resolves — they leave the support
@@ -347,6 +348,38 @@ class QuestionAnalyzer:
             self.labeler._count('extract_dropped_unsupported')
         return None
 
+    def _enforce_date_integrity(self, questions: List[Dict]) -> List[Dict]:
+        """
+        Invariant: identical question text on two different dates is illegal
+        unless that text genuinely appears at both dates. A date-collision
+        copy whose own source message doesn't contain the question is a
+        backfilled phantom — it gets dropped, never emitted as a fake
+        'asked 2x' recurrence.
+        """
+        min_support = float(os.getenv('EXTRACT_SUPPORT_MIN',
+                                      str(self.SOURCE_SUPPORT_MIN)))
+        by_text: Dict[str, List[Dict]] = {}
+        for q in questions:
+            by_text.setdefault(q['normalized_text'], []).append(q)
+
+        dropped = set()
+        for norm, copies in by_text.items():
+            dates = {q.get('date') for q in copies}
+            if len(copies) < 2 or len(dates) < 2:
+                continue
+            for q in copies:
+                support = self._source_support(norm, q.get('original_message') or '')
+                if support < min_support:
+                    logger.info("Dropped a date-collision phantom (%s copy of "
+                                "a question its source doesn't contain): %.80r",
+                                q.get('date'), q['text'])
+                    if self.labeler is not None:
+                        self.labeler._count('date_collisions_dropped')
+                    dropped.add(id(q))
+        if dropped:
+            return [q for q in questions if id(q) not in dropped]
+        return questions
+
     def _extract_questions_llm(self, messages: List[Dict], report) -> List[Dict]:
         """
         LLM-first extraction (LLM_EXTRACTION=full): every message goes to the
@@ -431,14 +464,23 @@ class QuestionAnalyzer:
                 batch = suspicious[start:start + DETECT_BATCH_SIZE]
                 hits = self.labeler.extract_questions([t for t, _ in batch],
                                                       thorough=True)
-                recovered = {hit['index'] for hit in (hits or [])}
+                # A message only counts as recovered if a SURVIVING question
+                # actually came from it — a hit dropped as unsupported (or
+                # reassigned elsewhere) must not block the regex fallback,
+                # or its message's question vanishes silently
+                recovered = set()
                 for hit in hits or []:
                     text, message = batch[hit['index']]
                     question = self._llm_question(hit['question'], text,
                                                   message, hit.get('type'))
                     question = self._verify_source(question, hit, batch)
-                    if question is not None:
-                        add_unless_duplicate(question)
+                    if question is None:
+                        continue
+                    for i, (t, _) in enumerate(batch):
+                        if t[:200] == question['original_message']:
+                            recovered.add(i)
+                            break
+                    add_unless_duplicate(question)
                 for q in self.extractor.questions_from_messages(
                         [m for i, (_, m) in enumerate(batch) if i not in recovered]):
                     add_unless_duplicate(q)
