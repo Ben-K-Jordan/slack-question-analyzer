@@ -360,6 +360,7 @@ function DashboardView({ onUpload }) {
           <RankedRow key={g.rank} rank={g.rank} index={i} question={g.question} count={g.count}
             maxCount={max} keywords={g.keywords} similarity={g.similarity} questions={g.questions}
             topic={g.topic} summary={g.summary} seenIn={g.seenIn} aiConfirmed={g.aiConfirmed} theme={g.theme}
+            answered={g.answered}
             onRenameTopic={g.topicId ? (name) => renameTopic(g.topicId, name) : null}
             defaultOpen={i === 0 && !query} />
         ))}
@@ -399,6 +400,7 @@ function DashboardView({ onUpload }) {
                       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
                         <span style={{ fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
                           {q.qtype ? <span title="What kind of question this is (classified during extraction)" style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--text-helper)', background: 'var(--gray-10)', padding: '1px 7px', marginRight: 8, whiteSpace: 'nowrap' }}>{q.qtype}</span> : null}
+                          {q.answered === true ? <span title="A thread reply answered this question" style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: '#198038', background: '#defbe6', padding: '1px 7px', marginRight: 8, whiteSpace: 'nowrap' }}>answered</span> : null}
                           {q.text}
                         </span>
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap' }}>
@@ -532,6 +534,8 @@ function transformAnalysisResults(results) {
       if (s.date_collisions_dropped) alerts.push(`${s.date_collisions_dropped} date-collision phantom(s) dropped`);
       if (s.extract_reassigned) alerts.push(`${s.extract_reassigned} extraction(s) reassigned to their true source`);
       if (s.same_ask_collapsed) alerts.push(`${s.same_ask_collapsed} same-ask rewrite(s) consolidated`);
+      if (s.extract_example_leaks) alerts.push(`${s.extract_example_leaks} AI-contamination leak(s) dropped`);
+      if (s.integrity_repairs) alerts.push(`${s.integrity_repairs} group(s) repaired (count couldn't prove its rows)`);
       return alerts.length ? alerts : null;
     })(),
     groups: results.groups.map((g, i) => ({
@@ -542,6 +546,7 @@ function transformAnalysisResults(results) {
       topic: g.topic || null,
       summary: g.summary || null,
       seenIn: g.seen_in_analyses || 0,
+      answered: g.answered || 0,
       topicId: g.topic_id || null,
       // Below the numeric bar means the AI verifier approved this merge
       aiConfirmed: !!(results.metadata && results.metadata.effective_threshold

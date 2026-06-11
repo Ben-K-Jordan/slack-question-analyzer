@@ -120,8 +120,12 @@ def test_csv_export(analyzer, tmp_path):
         rows = list(csv.reader(f))
 
     assert rows[0][0] == 'group_rank'
+    # The flat file carries the full second axis: kind/theme/type/answered
+    assert rows[0][-4:] == ['kind', 'theme', 'type', 'answered']
     # 2 grouped questions + 1 ungrouped + header
     assert len(rows) == 4
+    kinds = {r[7] for r in rows[1:]}
+    assert kinds == {'grouped', 'unique'}
 
 
 def test_markdown_export(analyzer, tmp_path):
@@ -133,6 +137,46 @@ def test_markdown_export(analyzer, tmp_path):
     assert '# Question Analysis Report' in report
     assert 'asked 2 times' in report
     assert 'Unique Questions (1)' in report
+    # No replies in the sample: Answered must be absent, not shown as 0
+    assert 'Answered (via thread replies)' not in report
+
+
+def test_exports_carry_feedback_answered_and_provenance(analyzer, tmp_path):
+    """The exports are a frontend too: feedback rows, answered status,
+    needs-review flags, and the provenance trail must all survive into
+    CSV/Markdown, not just the dashboard."""
+    results = analyzer.analyze_slack_content(SAMPLE_CONTENT)
+    results['feature_requests'] = [{'text': 'Add dark mode please.',
+                                    'date': '2024-01-05',
+                                    'qtype': 'feature-request'}]
+    results['dropped_questions'] = [{'text': 'Same ask reworded?',
+                                     'date': '2024-01-05', 'source': 'm1',
+                                     'reason': 'same-message rephrasing (lexical)'}]
+    results['threads_present'] = True
+    results['answered_questions'] = 1
+    results['groups'][0]['answered'] = 1
+    results['ungrouped_questions'][0]['answered'] = False
+    results['ungrouped_questions'][0]['needs_review'] = True
+
+    import csv as _csv
+    csv_path = tmp_path / 'r.csv'
+    analyzer.export_csv(results, str(csv_path))
+    with open(csv_path, newline='', encoding='utf-8') as f:
+        rows = list(_csv.reader(f))
+    kinds = {r[7] for r in rows[1:]}
+    assert 'feedback' in kinds and 'needs review' in kinds
+    answered_cells = {r[10] for r in rows[1:]}
+    assert 'no' in answered_cells  # per-question answered status exported
+
+    md_path = tmp_path / 'r.md'
+    analyzer.export_markdown(results, str(md_path))
+    report = md_path.read_text(encoding='utf-8')
+    assert 'Product Feedback (1)' in report
+    assert 'Answered (via thread replies):** 1' in report
+    assert 'Answered occurrences: 1' in report
+    assert 'Removed During Analysis (1)' in report
+    assert 'same-message rephrasing' in report
+    assert 'needs review' in report
 
 
 def test_keywords_contrast_against_corpus(analyzer):
