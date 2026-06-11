@@ -200,3 +200,37 @@ def test_date_collision_phantom_dropped(analyzer):
     dates_for_custom = [k['date'] for k in kept if k['text'] == custom]
     assert dates_for_custom == ['June 2, 2026']  # phantom May 30 copy dropped
     assert sum(1 for k in kept if 'password' in k['text']) == 2  # repeats kept
+
+def test_same_source_rephrases_never_count_as_recurrence(analyzer):
+    """Fixture-2 round 4: same-message rephrases that slipped past
+    consolidation clustered into a phantom 'asked 2x'. Invariant: within a
+    group, one occurrence per source message — unless the texts are
+    identical (distinct short messages can share the same text)."""
+    phantom = {'count': 2, 'questions': [
+        {'text': 'How can I normalize file encoding during transfers?',
+         'normalized_text': 'how can i normalize file encoding during transfers?',
+         'original_message': 'm4'},
+        {'text': 'What is the right way to handle encoding?',
+         'normalized_text': 'what is the right way to handle encoding?',
+         'original_message': 'm4'},
+    ]}
+    genuine = {'count': 2, 'questions': [
+        {'text': 'How do I reset my password?',
+         'normalized_text': 'how do i reset my password?',
+         'original_message': 'How do I reset my password?'},
+        {'text': 'How do I reset my password?',
+         'normalized_text': 'how do i reset my password?',
+         'original_message': 'How do I reset my password?'},
+    ]}
+    cross_message = {'count': 2, 'questions': [
+        {'text': 'Limit concurrent transfers per node?',
+         'normalized_text': 'limit concurrent transfers per node?',
+         'original_message': 'm10'},
+        {'text': 'Cap how many transfers run at once per node?',
+         'normalized_text': 'cap how many transfers run at once per node?',
+         'original_message': 'm11'},
+    ]}
+    analyzer._collapse_same_source_occurrences([phantom, genuine, cross_message])
+    assert phantom['count'] == 1        # rephrase phantom collapsed
+    assert genuine['count'] == 2        # identical-text repeats untouched
+    assert cross_message['count'] == 2  # genuine recurrence untouched

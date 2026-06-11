@@ -216,6 +216,11 @@ class QuestionAnalyzer:
                 auditor=auditor,
                 known_topics=known_topics
             )
+        # Invariant: a recurrence requires occurrences from DISTINCT source
+        # messages. Same-message rephrases that slip past consolidation can
+        # cluster into a phantom 'asked 2x'; collapse them deterministically
+        # — whatever upstream pass leaked them.
+        self._collapse_same_source_occurrences(groups)
         logger.info("Created %d question groups", len(groups))
         report('grouping', 1, 1)
 
@@ -573,6 +578,38 @@ class QuestionAnalyzer:
             if self.labeler is not None:
                 self.labeler._count('messages_without_questions', len(silent))
         return questions
+
+    @staticmethod
+    def _collapse_same_source_occurrences(groups: List[Dict]) -> None:
+        """
+        Enforce, after ALL grouping passes: within one group, one occurrence
+        per source message. Two rephrases of one message's ask are one
+        asking — counting them as 'asked 2x' is the recurrence lie this
+        pipeline has now produced three different ways; this kills the
+        whole class regardless of entry point. Cross-message occurrences
+        (genuine repeats) are untouched.
+        """
+        for group in groups:
+            first_norm: Dict[str, str] = {}
+            kept = []
+            for q in group['questions']:
+                source = q.get('original_message')
+                norm = q.get('normalized_text')
+                if source and source in first_norm and norm != first_norm[source]:
+                    # A DIFFERENT rewrite from an already-counted source:
+                    # a rephrase, not a repeat. (Identical text from an
+                    # identical source stays countable — distinct short
+                    # messages can share the same text.)
+                    logger.info("Collapsed a same-source occurrence inside a "
+                                "group (one message = one asking): %.80r",
+                                q['text'])
+                    continue
+                if source:
+                    first_norm.setdefault(source, norm)
+                kept.append(q)
+            if len(kept) < len(group['questions']):
+                group['questions'] = kept
+                group['count'] = len(kept)
 
     def _group_with_taxonomy(self, questions: List[Dict], taxonomy: Taxonomy,
                              verifier, auditor, known_topics,

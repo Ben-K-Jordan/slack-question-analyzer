@@ -71,6 +71,12 @@ class QuestionExtractor:
         stripped = self._BULLET.sub('', stripped).strip()
         return stripped if stripped else question
 
+    # Abbreviations whose periods are NOT sentence boundaries — splitting on
+    # "e.g." tore "...maintenance window, e.g. 1am to 4am?" into fragments
+    _ABBREVIATIONS = re.compile(
+        r'\b(?:e\.g\.|i\.e\.|etc\.|vs\.|approx\.|cf\.)', re.IGNORECASE)
+    _DOT_SENTINEL = '\x01'
+
     def extract_questions(self, text: str) -> List[str]:
         """
         Extract questions from text.
@@ -81,14 +87,18 @@ class QuestionExtractor:
         Returns:
             List of extracted question strings
         """
+        # Protect abbreviation periods before sentence splitting, restore after
+        protected = self._ABBREVIATIONS.sub(
+            lambda m: m.group(0).replace('.', self._DOT_SENTINEL), text)
+
         # Split into sentences, keeping the trailing '?' so it can be detected.
         # Newlines are sentence boundaries: a header or greeting on its own
         # line must never get glued onto the next line's question.
-        sentences = re.findall(r'[^.!?\n]+[.!?]?', text)
+        sentences = re.findall(r'[^.!?\n]+[.!?]?', protected)
 
         questions = []
         for sentence in sentences:
-            sentence = sentence.strip()
+            sentence = sentence.replace(self._DOT_SENTINEL, '.').strip()
             if self.is_question(sentence):
                 # Drop trailing '.'/'!' but keep '?'
                 questions.append(self.strip_greeting(sentence.rstrip('.!').strip()))
