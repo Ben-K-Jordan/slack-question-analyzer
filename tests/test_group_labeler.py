@@ -1006,3 +1006,21 @@ def test_under_extraction_recovered_by_widened_safety_net(monkeypatch):
     texts = [q['text'] for q in results['ungrouped_questions']]
     assert results['total_questions'] == 2
     assert any('Kafka' in t for t in texts)  # the lost half came back
+
+
+def test_cancel_check_fires_before_llm_calls_and_propagates(monkeypatch):
+    """Cancel must take effect between LLM calls, not at stage boundaries —
+    and the cancellation exception must NOT be swallowed by the generic
+    LLM-failure handler."""
+    class Cancelled(Exception):
+        pass
+
+    labeler = GroupLabeler('ollama')
+
+    def raise_cancel():
+        raise Cancelled()
+    labeler.cancel_check = raise_cancel
+
+    patch_chat(monkeypatch, ['{"topic": "X", "summary": "y"}'])
+    with pytest.raises(Cancelled):
+        labeler.label_group(['Some question?'])

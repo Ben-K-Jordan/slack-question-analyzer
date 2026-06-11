@@ -111,17 +111,23 @@ function UploadModal({ open, onClose, onImported }) {
     } catch (err) {
       jobIdRef.current = null;
       if (err.cancelled) {
+        setCancelling(false);
         setPhase('pick');  // back to file selection, not an error state
         return;
       }
+      setCancelling(false);
       setError(err.message);
       setPhase('error');
       console.error('Analysis error:', err);
     }
   };
 
+  const [cancelling, setCancelling] = React.useState(false);
   const cancel = () => {
-    if (jobIdRef.current) window.QA_API.cancelJob(jobIdRef.current);
+    if (jobIdRef.current) {
+      setCancelling(true);  // instant feedback: the backend stops at the next LLM call
+      window.QA_API.cancelJob(jobIdRef.current);
+    }
   };
 
   return (
@@ -162,7 +168,7 @@ function UploadModal({ open, onClose, onImported }) {
               <span style={{ fontSize: 11.5, color: 'var(--text-helper)', lineHeight: 1.4 }}>
                 First analysis warms up the AI models and can take a few minutes; repeat runs are much faster.
               </span>
-              <Button variant="ghost" icon={<Icon name="x" size={15} />} onClick={cancel}>Cancel analysis</Button>
+              <Button variant="ghost" icon={<Icon name="x" size={15} />} onClick={cancel} disabled={cancelling}>{cancelling ? 'Cancelling — stops at the next AI call…' : 'Cancel analysis'}</Button>
             </div>
           </div>
         ) : null}

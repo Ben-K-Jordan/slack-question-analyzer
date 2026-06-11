@@ -1,10 +1,21 @@
-# The Question Funnel — Pipeline Spec (v2.13.0, prompt pack 4, taxonomy v2)
+# The Question Funnel — Pipeline Spec (v2.23, prompt pack 8, taxonomy v2)
 
-> Pack-4 deltas vs the prompts quoted below: EXTRACT adds the intent-verb
-> rule, the sub-steps-aren't-questions rule, and per-question TYPE tags;
-> SUMMARY enforces level discipline (themes-only first sentence, 'evenly
-> spread' only when counts are within 1). Questions typed feature-request
-> leave the support funnel into results['feature_requests'].
+> Deltas since the prompts/stages quoted below were written:
+> - Two-judge rule for every DESTRUCTIVE action: audit evictions and
+>   same-ask consolidation drops need independent verifier agreement.
+> - Source-support invariant (extractions must be contained in their
+>   claimed message; reassign or drop), date-integrity invariant, and the
+>   exit invariant: a group may only render a count it can prove with rows
+>   (2+ distinct sources for any 2+ count); totals derive from rendered rows.
+> - Same-ask consolidation (within-message, quality model) and the
+>   confirmed-only feedback lane (feature-request tag + intent-aware 8B
+>   confirmation using the original message).
+> - Type-family merge veto (capability never LLM-merges with breakage).
+> - Provenance: results['dropped_questions'] records every removal with a
+>   reason; results metadata carries app_version, prompt_pack, taxonomy
+>   version, routing health, and LLM verdict rates.
+> - Cancellation is checked before every LLM call, not just at stage
+>   boundaries.
 
 How a Slack transcript becomes ranked topics. Design rule throughout: **the
 language model is never asked to do the hard open-ended thing.** Embeddings
