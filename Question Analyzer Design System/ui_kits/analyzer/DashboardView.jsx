@@ -366,7 +366,10 @@ function DashboardView({ onUpload }) {
                       title={hasOriginal && !open ? 'Click to see the original Slack message' : undefined}
                       style={{ padding: '8px 16px', cursor: hasOriginal ? 'pointer' : 'default' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
-                        <span style={{ fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>{q.text}</span>
+                        <span style={{ fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                          {q.qtype ? <span title="What kind of question this is (classified during extraction)" style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--text-helper)', background: 'var(--gray-10)', padding: '1px 7px', marginRight: 8, whiteSpace: 'nowrap' }}>{q.qtype}</span> : null}
+                          {q.text}
+                        </span>
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap' }}>
                           {q.date && q.date !== 'Unknown' ? <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-placeholder)' }}>{q.date}</span> : null}
                           {hasOriginal ? <span style={{ display: 'inline-flex', color: 'var(--text-placeholder)', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform var(--duration-base) var(--ease-productive)' }}><Icon name="chevron-down" size={12} /></span> : null}
