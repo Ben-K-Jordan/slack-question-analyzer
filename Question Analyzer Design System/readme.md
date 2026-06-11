@@ -97,11 +97,11 @@ How the product writes copy:
 
 - **System:** the product targets **@carbon/icons** (IBM's 2px-stroke, 16px-optical-grid,
   square-terminal icon set). Carbon icons ship as individual SVGs, not a CDN font.
-- **⚠️ Substitution (please confirm):** this system loads **[Lucide](https://lucide.dev)**
+- **Substitution (please confirm):** this system loads **[Lucide](https://lucide.dev)**
   from CDN (`unpkg.com/lucide`) as the closest readily-available match — same 2px stroke and
   geometric construction. Lucide uses *rounded* caps where Carbon uses square ones, so for
   production you should swap in the real `@carbon/icons` SVGs. Used in cards/UI kit via the
-  `data-lucide="<name>"` attribute and `lucide.createIcons()`. See `guidelines/brand-icons.card.html`.
+  `data-lucide="<name>"` attribute and `lucide.createIcons()`.
 - **Common icons:** `search`, `upload`, `filter`, `arrow-up-down`, `sliders-horizontal`,
   `hash`, `download`, `chevron-down`, `trending-up`, `sparkles`, `check`, `x`.
 - **Sizing:** 16px in dense UI, 18–22px for emphasis. Stroke width fixed at 2.
@@ -115,7 +115,7 @@ There is no provided product logo, so this system ships an **original** wordmark
 a black square **ranked-bars glyph** (three descending blue bars — the core metaphor of the
 app) paired with an IBM Plex "**Question** Analyzer" lockup (Semibold + Light). Files:
 `assets/logo.svg` (lockup), `assets/mark.svg` (glyph only). The IBM 8-bar logo is **not**
-reproduced. See `guidelines/brand-logo.card.html`.
+reproduced.
 
 ---
 
@@ -125,9 +125,9 @@ reproduced. See `guidelines/brand-logo.card.html`.
 - `styles.css` — global entry point (consumers link this one file); `@import`s all tokens + fonts.
 - `tokens/` — `colors.css`, `typography.css`, `spacing.css`, `elevation.css`, `fonts.css`.
 - `assets/` — `logo.svg`, `mark.svg`.
-- `SKILL.md` — Agent-Skill manifest for use in Claude Code.
 
-**Components** (`components/<Name>/` — `.jsx` + `.d.ts` + `.prompt.md` + card)
+**Components** (`components/<Name>/` — `.jsx` + `.d.ts`; compiled into
+`_ds_bundle.js`, which the UI kit loads)
 - `Button` — primary/secondary/tertiary/ghost/danger; sharp, right-pinned icon.
 - `Tag` — Carbon pill for keywords & status; 8 color pairs, outline, dismissible.
 - `Card` — layered surface; accent bar, hover lift, selected state.
@@ -136,13 +136,10 @@ reproduced. See `guidelines/brand-logo.card.html`.
 - `FileDropzone` — drag-drop upload field with selected-file chip.
 - `QuestionGroup` — **hero** ranked, expandable group of similar questions.
 
-**Guidelines** (`guidelines/*.card.html`) — foundation specimens for the Design System tab:
-Colors (Blue, Gray, Support, Semantic), Type (Headings, Body/Mono), Spacing (Scale, Radii &
-Elevation), Brand (Logo, Heat ramp, Iconography).
-
-**UI kit** (`ui_kits/analyzer/`) — full interactive recreation: `index.html` runs the
-end-to-end flow (upload → analyze → ranked results). Screens: `Header`, `ConfigRail`,
-`UploadView`, `ResultsView`, assembled in `App.jsx` with sample data in `data.jsx`.
+**UI kit** (`ui_kits/analyzer/`) — the real dashboard app: `index.html` runs the
+end-to-end flow (upload, analyze, ranked results) against the backend (`api.js`),
+assembled in `App.jsx` from `AppHeader`, `DashboardView`, `WeekView`, `Modals`,
+`RankedRow`, `Icon`, and `anim`.
 
 ---
 
