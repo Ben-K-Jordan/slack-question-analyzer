@@ -6,6 +6,9 @@
     "total_asks": 17,
     "recurring_topics": 1,
     "recurring_must_match": ["rotat|roll", "key"],
+    "recurring_groups": [
+      {"must_match": ["rotat|roll", "key"], "count": 2}
+    ],
     "feedback_count": 2,
     "feedback_must_match": ["dark mode", "audit"],
     "message_asks": [

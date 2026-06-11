@@ -192,7 +192,7 @@ FEEDBACK_SYSTEM = (
 
 # Prompt pack version: stamped into results metadata so drift is traceable
 # (the LLM cache keys on full prompt text, so bumps also invalidate caches)
-PROMPT_PACK_VERSION = 12
+PROMPT_PACK_VERSION = 13
 
 LABEL_SYSTEM = (
     "If the group is empty, malformed, or too mixed to share one honest "
@@ -532,6 +532,11 @@ ANSWERED_SYSTEM = (
     "acknowledgments ('thanks', 'good question', 'same here'); promises "
     "('let me check', 'I'll get back to you', 'looping in X'); asking for "
     "more details; restating or clarifying the problem; unrelated chatter.\n"
+    "A thread may contain SEVERAL asks: judge only the question shown. "
+    "Replies often answer by number ('for #2, yes — use X; not sure on "
+    "#1') — use the first message to work out which numbered ask is the "
+    "question being judged, and count only the part of the reply aimed at "
+    "it.\n"
     "Example: question 'How do I reset my password?', reply 'Settings > "
     "Security > Reset, then check your email.': {\"verdict\": \"answered\"}\n"
     "Example: question 'Why did my transfer fail?', reply 'Hmm, let me check "
@@ -1039,12 +1044,19 @@ class GroupLabeler:
                 found.append(entry)
         return found
 
-    def is_answered(self, question: str, replies: List[str]) -> Optional[bool]:
-        """Decide whether thread replies actually answered the question."""
+    def is_answered(self, question: str, replies: List[str],
+                    context: str = '') -> Optional[bool]:
+        """Decide whether thread replies actually answered the question.
+
+        context is the thread's first message: a multi-ask thread's replies
+        often answer by NUMBER ('for #2, yes...'), which is unresolvable
+        from the rewritten question alone."""
+        intro = (f"Thread's first message (for context): {context[:300]}\n\n"
+                 if context else '')
         user = (
-            f"Question: {question}\n\nThread replies:\n" +
+            f"{intro}Question being judged: {question}\n\nThread replies:\n" +
             '\n'.join(f"- {r[:300]}" for r in replies[:5]) +
-            '\n\nWas the question answered by these replies?'
+            '\n\nWas THIS question answered by these replies?'
         )
         data = self._generate_json(self._system(ANSWERED_SYSTEM), user, ANSWERED_SCHEMA, max_tokens=60)
         if data is None:
