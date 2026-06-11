@@ -503,6 +503,11 @@ class GroupLabeler:
         # under-forming and a downstream pass is papering over it.
         self.stats: Dict[str, int] = {}
 
+        # Cancellation hook: called before every LLM call so a cancel takes
+        # effect between calls instead of waiting for a stage boundary
+        # (a single call can run minutes on CPU). Raising is the contract.
+        self.cancel_check = None
+
     def _count(self, key: str, n: int = 1):
         self.stats[key] = self.stats.get(key, 0) + n
 
@@ -576,6 +581,8 @@ class GroupLabeler:
         """
         if self.provider != 'ollama' or not self.model:
             return
+        if self.cancel_check is not None:
+            self.cancel_check()
         self.available()  # resolves the fast/quality model split
 
         def load(model):
@@ -656,6 +663,8 @@ class GroupLabeler:
         appended to the conversation. Returns None when both attempts fail.
         Successful (validated) results are cached on disk by prompt.
         """
+        if self.cancel_check is not None:
+            self.cancel_check()  # outside the try: cancellation must propagate
         cache_key = f"{model or self.model}\n{system}\n{user}"
         cached = self._cache.get(cache_key)
         if cached is not None:
