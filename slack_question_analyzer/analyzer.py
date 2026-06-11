@@ -151,27 +151,40 @@ class QuestionAnalyzer:
         questions = self._enforce_date_integrity(questions)
         questions = self._consolidate_same_ask(questions)
 
-        # The type axis pays off here: feature requests are product feedback,
-        # not support questions a doc page resolves — they leave the support
-        # funnel entirely. The extractor's tag alone isn't trusted: the
-        # quality model confirms, or the question stays in support (the
-        # safer home — a misrouted support question is invisible to support,
-        # while a feature request among support questions is merely noise)
+        # Feature requests are product feedback, not support questions a doc
+        # page resolves — they leave the support funnel entirely. Diversion
+        # is gated on DETERMINISTIC linguistic evidence in the source
+        # message, because both models have proven unreliable here in both
+        # directions (the 3B tag misses explicitly-labeled items; the 8B
+        # confirm has diverted plain capability questions):
+        #   - no wish-phrasing in the source -> stays in support, period.
+        #     "Can we cap transfers per node?" is a support ask no matter
+        #     what any model thinks (a misrouted support question is
+        #     invisible to support; feedback noise is merely noise)
+        #   - wish-phrasing + an explicit label ("feature request",
+        #     "product feedback") -> feedback; the asker classified it
+        #   - wish-phrasing alone -> the quality model decides (doubt ->
+        #     support). The 3B's tag no longer gates anything: it missed
+        #     items sitting in messages literally headed "Feature request:"
         confirm = (self.labeler.confirm_feature_request
                    if self.labeler is not None and self._llm_enabled('auto')
                    else None)
         feature_requests, kept = [], []
         for q in questions:
-            if (q.get('qtype') == 'feature-request'
-                    and (confirm is None
-                         or confirm(q['text'],
-                                    q.get('original_message') or '') is True)):
+            source = q.get('original_message') or ''
+            wishful = bool(self._WISH_RE.search(source))
+            labeled = bool(self._FEEDBACK_LABEL_RE.search(source))
+            if wishful and (labeled
+                            or (confirm is not None
+                                and confirm(q['text'], source) is True)):
+                q['qtype'] = 'feature-request'
                 feature_requests.append(q)
-            else:
-                if q.get('qtype') == 'feature-request':
-                    logger.info("Kept in support (feature-request tag not "
-                                "confirmed): %.80r", q['text'])
-                kept.append(q)
+                continue
+            if q.get('qtype') == 'feature-request':
+                logger.info("Kept in support (%s): %.80r",
+                            'no wish-phrasing in the source message'
+                            if not wishful else 'not confirmed', q['text'])
+            kept.append(q)
         questions = kept
         if feature_requests:
             logger.info("Routed %d confirmed feature request(s) out of the "
@@ -389,6 +402,21 @@ class QuestionAnalyzer:
         return matched / len(tokens)
 
     SOURCE_SUPPORT_MIN = 0.35
+
+    # Deterministic feedback-lane gates (see analyze_contents). WISH:
+    # capability-wish phrasing — deliberately excludes task phrasing
+    # ("customer wants to bulk-deactivate...") and polite support openers
+    # ("I would like to know how..."). LABEL: the asker classified the
+    # item themselves.
+    _WISH_RE = re.compile(
+        r"would (really )?(love|like)(?! to (know|understand|ask))"
+        r"|would be (great|nice|helpful)|would help"
+        r"|\bwish (the|we|it|there)\b|please add|any plans to|love it if"
+        r"|wants? to be able to|doesn'?t exist today|isn'?t possible today",
+        re.IGNORECASE)
+    _FEEDBACK_LABEL_RE = re.compile(
+        r'\b(feature requests?|product feedback|enhancement requests?'
+        r'|customer feedback)\b', re.IGNORECASE)
 
     def _verify_source(self, question: Dict, hit: Dict, batch) -> Optional[Dict]:
         """

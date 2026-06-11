@@ -1,6 +1,16 @@
-# The Question Funnel — Pipeline Spec (v2.28, prompt pack 10, taxonomy v3)
+# The Question Funnel — Pipeline Spec (v2.29, prompt pack 11, taxonomy v3)
 
 > Deltas since the prompts/stages quoted below were written:
+> - Eval round 3: feedback diversion is gated on DETERMINISTIC wish
+>   phrasing in the source message — without it a question stays in
+>   support no matter what any model says (the 8B had diverted plain
+>   capability questions, killing a recurrence and the Answered count);
+>   wish + an explicit "feature request"/"product feedback" label diverts
+>   with no LLM at all; wish alone goes to the conservative confirmer.
+>   The 3B's feature-request tag no longer gates anything. 'and
+>   separately' splits compound sentences into distinct ask candidates so
+>   the under-extraction safety net can count them. VERIFY gains the
+>   credential-lifecycle vs identity-verification example.
 > - Eval round 2: same-source occurrences inside a group are EJECTED to
 >   their own singleton row, never deleted (a wrong eject = one extra
 >   unique; a wrong delete = a silent drop). The extraction REAL

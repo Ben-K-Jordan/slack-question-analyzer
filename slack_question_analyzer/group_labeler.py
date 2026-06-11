@@ -179,22 +179,20 @@ FEEDBACK_SYSTEM = (
     "('it would be great if...', 'can you add...', 'the product should...').\n"
     "Asking HOW to do something, WHETHER something is possible today, or WHY "
     "something is broken is SUPPORT — even if the answer turns out to be "
-    "'not supported'. When in doubt, answer false.\n"
-    "EXCEPTION that overrides doubt: if the original message explicitly "
-    "labels the item ('feature request', 'product feedback', 'enhancement "
-    "request', 'asks from the customer feedback session'), the asker has "
-    "already classified it — answer true.\n"
+    "'not supported'. A capability question ('can we cap transfers per "
+    "node?') is SUPPORT, not a feature request, unless the asker says the "
+    "capability is missing and wished for. When in doubt, answer false.\n"
     "Judge the asker's INTENT from the original message when it is shown: "
     "wish-phrasing ('would be great', 'would love', 'please add', 'any plans "
-    "to') signals feedback even when the rewritten question sounds like a "
-    "support ask.\n"
+    "to', 'doesn't exist today') signals feedback even when the rewritten "
+    "question sounds like a support ask.\n"
     "Respond with JSON only: {\"feature_request\": true} or "
     "{\"feature_request\": false}"
 )
 
 # Prompt pack version: stamped into results metadata so drift is traceable
 # (the LLM cache keys on full prompt text, so bumps also invalidate caches)
-PROMPT_PACK_VERSION = 10
+PROMPT_PACK_VERSION = 11
 
 LABEL_SYSTEM = (
     "If the group is empty, malformed, or too mixed to share one honest "
@@ -263,6 +261,10 @@ VERIFY_SYSTEM = (
     "asks how to enforce password rules on accounts. Setting something up and "
     "configuring ONE property of it are different workflow stages with "
     "different doc pages: {\"same_topic\": false}\n"
+    "Example: Group A asks how to rotate or renew their own credentials; "
+    "Group B asks how to verify the other party's identity before "
+    "connecting. Credential lifecycle vs identity verification — related "
+    "security tasks, different doc pages: {\"same_topic\": false}\n"
     "Example: Group A asks how to merge the content of two files; Group B asks "
     "whether a control file can trigger a transfer. Both mention files, but "
     "merging contents and trigger-on-control-file are different operations "

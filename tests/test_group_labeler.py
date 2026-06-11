@@ -1121,3 +1121,80 @@ def test_questions_from_llm_filters_example_leaks(monkeypatch):
     assert [f['question'] for f in found] == [
         'How do I increase the SFTP timeout?']
     assert labeler.stats.get('extract_example_leaks') == 1
+
+
+def test_feedback_diversion_requires_wish_phrasing(monkeypatch):
+    """Eval round 3: the 8B confirm diverted plain capability questions
+    ('can we cap transfers per node?') out of the support funnel — killing
+    a true recurrence and the Answered count. Without wish-phrasing in the
+    source message, a question stays in support no matter what any model
+    says."""
+    monkeypatch.setenv('LLM_EXTRACTION', 'full')
+    vectors = {'can we cap how many transfers run at once per node?': [1.0, 0.0]}
+    analyzer = make_analyzer(monkeypatch, vectors=vectors, label_groups=True)
+    stub_llm(monkeypatch, analyzer,
+             label_group=lambda texts, keywords=None: None,
+             verify_same_topic=lambda a, b: None,
+             extract_questions=lambda texts, thorough=False: [
+                 {'index': 0, 'question': 'Can we cap how many transfers run at once per node?',
+                  'type': 'feature-request'}],  # mis-tagged
+             confirm_feature_request=lambda text, context='': True,  # 8B wrong too
+             summarize_analysis=lambda groups, total, themes=None: None)
+
+    results = analyzer.analyze_slack_content(
+        '2024-06-03\nCan we cap how many transfers run at once per node to prevent overload?\n')
+    assert results['feature_requests'] == []          # both models overruled
+    assert results['total_questions'] == 1
+
+
+def test_feedback_diversion_explicit_label_is_decisive(monkeypatch):
+    """A message the asker explicitly headed 'Feature request:' (with wish
+    phrasing) diverts deterministically — no model tag, no confirm call.
+    Eval round 3 found these never reached the confirmer because the 3B
+    tag was the only gate."""
+    monkeypatch.setenv('LLM_EXTRACTION', 'full')
+    vectors = {'can the ui let you configure retry-with-backoff?': [1.0, 0.0]}
+    analyzer = make_analyzer(monkeypatch, vectors=vectors, label_groups=True)
+    confirm_calls = []
+
+    def confirm(text, context=''):
+        confirm_calls.append(text)
+        return False
+
+    stub_llm(monkeypatch, analyzer,
+             label_group=lambda texts, keywords=None: None,
+             verify_same_topic=lambda a, b: None,
+             extract_questions=lambda texts, thorough=False: [
+                 {'index': 0, 'question': 'Can the UI let you configure retry-with-backoff?',
+                  'type': 'is-it-possible'}],  # NOT tagged feature-request
+             confirm_feature_request=confirm,
+             summarize_analysis=lambda groups, total, themes=None: None)
+
+    results = analyzer.analyze_slack_content(
+        '2024-06-03\nFeature request: the customer would like the UI to let '
+        'you configure a retry-with-backoff policy without editing config files.\n')
+    assert len(results['feature_requests']) == 1
+    assert confirm_calls == []  # label + wish: deterministic, no LLM needed
+    assert results['feature_requests'][0]['qtype'] == 'feature-request'
+
+
+def test_feedback_diversion_wish_alone_needs_confirmation(monkeypatch):
+    """Wish-phrasing without an explicit label opens the gate but the
+    quality model decides (this is how an untagged 'would love a heat-map
+    view' item still reaches feedback)."""
+    monkeypatch.setenv('LLM_EXTRACTION', 'full')
+    vectors = {'can the dashboard get a heat-map view of failures?': [1.0, 0.0]}
+    analyzer = make_analyzer(monkeypatch, vectors=vectors, label_groups=True)
+    stub_llm(monkeypatch, analyzer,
+             label_group=lambda texts, keywords=None: None,
+             verify_same_topic=lambda a, b: None,
+             extract_questions=lambda texts, thorough=False: [
+                 {'index': 0, 'question': 'Can the dashboard get a heat-map view of failures?',
+                  'type': 'is-it-possible'}],
+             confirm_feature_request=lambda text, context='': True,
+             summarize_analysis=lambda groups, total, themes=None: None)
+
+    results = analyzer.analyze_slack_content(
+        '2024-06-03\nCustomer would love it if the dashboard had a heat-map '
+        'view of transfer failures. Doesn\'t exist today but would help.\n')
+    assert len(results['feature_requests']) == 1
