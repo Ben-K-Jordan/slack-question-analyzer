@@ -137,12 +137,25 @@ CONSOLIDATE_SYSTEM = (
     "All of these questions were extracted from ONE message. Questions that "
     "restate the same ask from a different angle, or break one goal into "
     "steps, are ONE ask. The test: would one answer resolve both?\n"
+    "Restatement cues: in the original message, a sentence introduced by "
+    "'Basically', 'I mean', 'in other words', 'so', or 'that is' usually "
+    "REWORDS the previous ask — same ask. A forwarded quote plus the "
+    "forwarder's own paraphrase of it is also ONE ask. Stating the problem "
+    "('we don't want X to happen') and then asking how to achieve that "
+    "outcome is ONE ask, not two.\n"
+    "But two questions wanting DIFFERENT outcomes are distinct even when "
+    "they share a feature area or phrasing template — a retention policy "
+    "and an auto-delete schedule need different answers.\n"
     "Output the numbers to KEEP — exactly one per distinct ask, keeping the "
     "most complete phrasing. If every question is a distinct ask, return "
     "every number.\n\n"
     "Example: 1. Could the scheduler be running in the wrong timezone after "
     "DST? 2. Is the transfers-stopping-after-DST issue timezone-related? "
     "One answer resolves both: {\"keep\": [1]}\n"
+    "Example: 1. Can we prevent the import from hard-failing on a bad row? "
+    "2. How can we handle a bad row gracefully and divert it for review? "
+    "Same outcome wanted (don't fail outright), one answer resolves both: "
+    "{\"keep\": [2]}\n"
     "Example: 1. Can we trigger transfers via REST? 2. Is there a way to "
     "bulk-disable actions? Different asks: {\"keep\": [1, 2]}\n\n"
     "Respond with JSON only: {\"keep\": [<numbers>]}"
@@ -167,6 +180,10 @@ FEEDBACK_SYSTEM = (
     "Asking HOW to do something, WHETHER something is possible today, or WHY "
     "something is broken is SUPPORT — even if the answer turns out to be "
     "'not supported'. When in doubt, answer false.\n"
+    "EXCEPTION that overrides doubt: if the original message explicitly "
+    "labels the item ('feature request', 'product feedback', 'enhancement "
+    "request', 'asks from the customer feedback session'), the asker has "
+    "already classified it — answer true.\n"
     "Judge the asker's INTENT from the original message when it is shown: "
     "wish-phrasing ('would be great', 'would love', 'please add', 'any plans "
     "to') signals feedback even when the rewritten question sounds like a "
@@ -177,7 +194,7 @@ FEEDBACK_SYSTEM = (
 
 # Prompt pack version: stamped into results metadata so drift is traceable
 # (the LLM cache keys on full prompt text, so bumps also invalidate caches)
-PROMPT_PACK_VERSION = 8
+PROMPT_PACK_VERSION = 9
 
 LABEL_SYSTEM = (
     "If the group is empty, malformed, or too mixed to share one honest "
@@ -242,6 +259,10 @@ VERIFY_SYSTEM = (
     "{\"same_topic\": false}\n"
     "Example: Group A asks about triggering transfers via REST API; Group B asks "
     "about scheduling recurring transfers: {\"same_topic\": false}\n"
+    "Example: Group A asks how to set up a new user account end to end; Group B "
+    "asks how to enforce password rules on accounts. Setting something up and "
+    "configuring ONE property of it are different workflow stages with "
+    "different doc pages: {\"same_topic\": false}\n"
     "Example: Group A asks how to merge the content of two files; Group B asks "
     "whether a control file can trigger a transfer. Both mention files, but "
     "merging contents and trigger-on-control-file are different operations "
@@ -380,10 +401,15 @@ EXTRACT_SYSTEM = (
     "Rules:\n"
     "- A message often contains MORE THAN ONE real question: output one entry "
     "per REAL question, repeating the message number. Implicit help requests "
-    "count as REAL.\n"
+    "count as REAL. Asks joined by 'and separately', 'also', 'second "
+    "question', or a numbered list of UNRELATED requests are DISTINCT asks — "
+    "output every one of them; never drop the later ones.\n"
     "- Output each distinct ask ONCE. Never output two rewrites of the same "
     "ask from one message (asking 'what is the error' and 'why does it fail' "
     "about the same failure is ONE ask).\n"
+    "- An 'Or ...?' follow-up offering an ALTERNATIVE route to the SAME goal "
+    "('Can X do this? Or do we have to build it ourselves?') is part of that "
+    "one ask — output ONE question covering the goal, not two.\n"
     "- Enumerated steps of a single workflow or task list ('1. Find the file "
     "2. Move it 3. Merge them') are ONE question about whether the whole "
     "workflow is possible — never one question per step.\n"
@@ -434,6 +460,45 @@ DO NOT answer message 4 like this: {"index": 4, "question": "How do I bypass ant
 Wrong because: the asker never said bypass — they reported a failure and want it explained or fixed. Describe the symptom; never name a resolution they didn't state.
 
 Now extract from these messages."""
+
+# The worked example's output questions. Small models sometimes copy them
+# into real output; an extraction that reproduces one WITHOUT strong textual
+# support in its claimed source message is prompt contamination, not content.
+_EXAMPLE_QUESTION_TEXTS = (
+    'Can we trigger transfers via REST instead of the scheduler?',
+    'Is there a way to bulk-disable actions?',
+    "Can the wM MFT (SaaS) Action log show a graphical representation of "
+    "each task's status?",
+    'Can Actions in wM MFT (SaaS) be grouped and filtered by group name?',
+    'Can tasks be configured to find file001.txt and file002.txt in a folder '
+    'and merge them with a Flow Service?',
+    'Why does a copy task fail during the antivirus scanning phase?',
+)
+
+
+def _looks_like_example_leak(question: str, source_message: str) -> bool:
+    """
+    True when an extracted question reproduces a few-shot example (high token
+    Jaccard) AND its claimed source message can't account for its vocabulary.
+    A transcript that GENUINELY contains a similar question keeps it: nearly
+    all of its content words appear in the source.
+    """
+    toks = set(re.findall(r'[a-z0-9]+', question.lower()))
+    if not toks:
+        return False
+    if not any(len(toks & ex) / len(toks | ex) >= 0.75
+               for ex in _EXAMPLE_TOKEN_SETS):
+        return False
+    content = [t for t in toks if len(t) > 3]
+    if not content:
+        return True
+    msg = source_message.lower()
+    supported = sum(1 for t in content if t in msg)
+    return supported / len(content) < 0.8
+
+
+_EXAMPLE_TOKEN_SETS = [set(re.findall(r'[a-z0-9]+', t.lower()))
+                       for t in _EXAMPLE_QUESTION_TEXTS]
 
 ANSWERED_SYSTEM = (
     "If the thread is empty or malformed, respond {\"verdict\": \"unknown\"} "
@@ -942,6 +1007,12 @@ class GroupLabeler:
             index = item.get('index')
             question = str(item.get('question', '')).strip()
             if isinstance(index, int) and 0 <= index < len(message_texts) and question:
+                if _looks_like_example_leak(question, message_texts[index]):
+                    logger.info("Dropped a prompt-example leak (copied from "
+                                "the few-shot, unsupported by its source): "
+                                "%.80r", question)
+                    self._count('extract_example_leaks')
+                    continue
                 entry = {'index': index, 'question': question}
                 if item.get('type') in QUESTION_TYPES:
                     entry['type'] = item['type']

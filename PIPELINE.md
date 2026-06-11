@@ -1,6 +1,25 @@
-# The Question Funnel — Pipeline Spec (v2.23, prompt pack 8, taxonomy v2)
+# The Question Funnel — Pipeline Spec (v2.26, prompt pack 9, taxonomy v2)
 
 > Deltas since the prompts/stages quoted below were written:
+> - Prompt pack 9 (first eval round across all 4 transcript fixtures):
+>   extraction gains the or-alternative rule (an 'Or...?' offering another
+>   route to the same goal is ONE ask) and the explicit multi-part rule
+>   ('and separately' / numbered unrelated requests are DISTINCT asks);
+>   consolidation gains restatement cues ('Basically', 'I mean', forwarded
+>   quote + paraphrase = one ask) and a different-outcomes guard; feedback
+>   confirmation treats an explicit 'feature request'/'product feedback'
+>   label in the source as decisive; verify gains the workflow-stage rule
+>   (setting X up vs configuring one property of X = different topics).
+> - Example-leak guard: an extraction that reproduces a few-shot example
+>   question without strong textual support in its claimed source message
+>   is prompt contamination — dropped and counted (extract_example_leaks).
+> - Lexical rephrase-collapse counts CONTENT words only (>3 chars):
+>   template boilerplate is zero same-ask evidence; gray zone falls through
+>   to two-judge LLM consolidation. When a collapse fires, the survivor is
+>   the best-SOURCE-SUPPORTED phrasing, not the first-seen one.
+> - Plain-text transcripts: '>'-quoted lines are thread replies (attached
+>   for answer detection, never extracted as questions); '# ' headings are
+>   structural markup.
 > - Two-judge rule for every DESTRUCTIVE action: audit evictions and
 >   same-ask consolidation drops need independent verifier agreement.
 > - Source-support invariant (extractions must be contained in their

@@ -313,18 +313,36 @@ class QuestionAnalyzer:
         within one message, a moderate content-word overlap means same ask.
         Distinct multi-questions in a message (REST triggers vs bulk-disable)
         share almost no content words and are kept.
+
+        CONTENT words only (>3 chars, same bar as source support): two
+        distinct asks rewritten onto one template ('Can we X in wM MFT
+        (SaaS)?' / 'Can we Y in wM MFT (SaaS)?') share plenty of filler and
+        boilerplate, and that carries zero same-ask evidence. Anything in
+        the gray zone falls through to the LLM consolidation pass, where
+        dropping takes two judges.
         """
         threshold = float(os.getenv('SAME_MESSAGE_REPHRASE_OVERLAP', '0.5'))
 
         def tokens(q):
-            return set(re.findall(r'[a-z0-9]+', q['normalized_text'].lower()))
+            return {t for t in re.findall(r'[a-z0-9]+',
+                                          q['normalized_text'].lower())
+                    if len(t) > 3}
+
+        def rank(q, toks):
+            # Which phrasing survives a collapse: the one the source message
+            # actually vouches for. An extraction that borrowed vocabulary
+            # (prompt examples, neighbor messages) loses to the rewrite drawn
+            # from the message itself.
+            support = self._source_support(q['normalized_text'],
+                                           q.get('original_message') or '')
+            return (support, len(toks), len(q.get('text') or ''))
 
         kept: List[Dict] = []
         by_message: Dict[str, List[Dict]] = {}
         for q in questions:
             source = q.get('original_message') or ''
             toks = tokens(q)
-            duplicate = False
+            match = None
             for seen in by_message.get(source, []):
                 # IDENTICAL text is a genuine repeat (someone asked the exact
                 # question again) — occurrence counting handles it. Only a
@@ -333,14 +351,23 @@ class QuestionAnalyzer:
                     continue
                 overlap = len(toks & seen['tokens']) / max(1, min(len(toks), len(seen['tokens'])))
                 if overlap >= threshold:
-                    duplicate = True
+                    match = seen
                     break
-            if duplicate:
-                logger.info("Collapsed a same-message rephrasing: %.80r", q['text'])
-                self._record_drop(q, 'same-message rephrasing (lexical)')
+            if match is not None:
+                if rank(q, toks) > match['rank']:
+                    logger.info("Collapsed a same-message rephrasing (kept a "
+                                "better-supported one): %.80r", match['q']['text'])
+                    self._record_drop(match['q'], 'same-message rephrasing (lexical)')
+                    kept[match['pos']] = q
+                    match.update(norm=q['normalized_text'], tokens=toks,
+                                 q=q, rank=rank(q, toks))
+                else:
+                    logger.info("Collapsed a same-message rephrasing: %.80r", q['text'])
+                    self._record_drop(q, 'same-message rephrasing (lexical)')
                 continue
             by_message.setdefault(source, []).append(
-                {'norm': q['normalized_text'], 'tokens': toks})
+                {'norm': q['normalized_text'], 'tokens': toks, 'q': q,
+                 'rank': rank(q, toks), 'pos': len(kept)})
             kept.append(q)
         return kept
 
