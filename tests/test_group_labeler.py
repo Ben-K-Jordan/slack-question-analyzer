@@ -1198,3 +1198,34 @@ def test_feedback_diversion_wish_alone_needs_confirmation(monkeypatch):
         '2024-06-03\nCustomer would love it if the dashboard had a heat-map '
         'view of transfer failures. Doesn\'t exist today but would help.\n')
     assert len(results['feature_requests']) == 1
+
+
+def test_question_shaped_statement_not_restored_over_two_model_nos(monkeypatch):
+    """Fixture-5 fabrication: 'Will post here when it's back up' is
+    question-shaped to the regex (question word at start) but both models
+    said the announcement contains no ask. When the quality-model call
+    SUCCEEDED, only an explicit '?' can overrule it; a failed call still
+    restores everything."""
+    monkeypatch.setenv('LLM_EXTRACTION', 'full')
+    analyzer = make_analyzer(monkeypatch, vectors={}, label_groups=True)
+    stub_llm(monkeypatch, analyzer,
+             label_group=lambda texts, keywords=None: None,
+             verify_same_topic=lambda a, b: None,
+             extract_questions=lambda texts, thorough=False: [],  # both: no ask
+             summarize_analysis=lambda groups, total, themes=None: None)
+    results = analyzer.analyze_slack_content(
+        '2024-06-09\nHeads up team - maintenance window this Saturday. '
+        'Will post here when it is back up.\n')
+    assert results['total_questions'] == 0
+
+    # Same shape WITH a '?': the regex version is kept (the IWHI case)
+    vectors = {'will the staging tenant stay up during the move?': [1.0, 0.0]}
+    analyzer2 = make_analyzer(monkeypatch, vectors=vectors, label_groups=True)
+    stub_llm(monkeypatch, analyzer2,
+             label_group=lambda texts, keywords=None: None,
+             verify_same_topic=lambda a, b: None,
+             extract_questions=lambda texts, thorough=False: [],
+             summarize_analysis=lambda groups, total, themes=None: None)
+    results = analyzer2.analyze_slack_content(
+        '2024-06-09\nWill the staging tenant stay up during the move?\n')
+    assert results['total_questions'] == 1
