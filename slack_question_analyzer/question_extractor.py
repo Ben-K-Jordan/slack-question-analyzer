@@ -87,9 +87,11 @@ class QuestionExtractor:
         Returns:
             List of extracted question strings
         """
-        # Protect abbreviation periods before sentence splitting, restore after
+        # Protect abbreviation and decimal periods ("e.g.", "10.15") before
+        # sentence splitting; restored after
         protected = self._ABBREVIATIONS.sub(
             lambda m: m.group(0).replace('.', self._DOT_SENTINEL), text)
+        protected = re.sub(r'(?<=\d)\.(?=\d)', self._DOT_SENTINEL, protected)
 
         # Split into sentences, keeping the trailing '?' so it can be detected.
         # Newlines are sentence boundaries: a header or greeting on its own
