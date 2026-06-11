@@ -292,6 +292,17 @@ function DashboardView({ onUpload }) {
 
       {setupBanner}
 
+      {d.analyzedWith && window.QA_BACKEND_VERSION && d.analyzedWith !== window.QA_BACKEND_VERSION ? (
+        <Reveal delay={101}>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: '14px 24px', background: '#fcf4d6', borderLeft: '3px solid #f1c21b', marginBottom: 32 }}>
+            <span style={{ color: '#8a6116', flex: '0 0 auto', marginTop: 1 }}><Icon name="history" size={16} /></span>
+            <span style={{ fontSize: 13.5, color: '#5c4a0a', lineHeight: 1.55 }}>
+              <b>These results were produced by v{d.analyzedWith}</b> — the server is now running v{window.QA_BACKEND_VERSION}. Restarting the server does not re-analyze: <b>re-upload the transcript</b> to apply the latest fixes.
+            </span>
+          </div>
+        </Reveal>
+      ) : null}
+
       {d.extractionAlerts ? (
         <Reveal delay={102}>
           <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: '14px 24px', background: '#fcf4d6', borderLeft: '3px solid #f1c21b', marginBottom: 32 }}>
@@ -463,6 +474,7 @@ function transformAnalysisResults(results) {
     topTheme: (results.themes && results.themes[0]) ? results.themes[0].name : null,
     featureRequests: results.feature_requests || [],
     threadsPresent: !!results.threads_present,
+    analyzedWith: (results.metadata && results.metadata.app_version) || null,
     // Extraction anomalies must be LOUD: silent drops were the worst bug class
     extractionAlerts: (() => {
       const s = (results.metadata && results.metadata.llm_stats) || {};
