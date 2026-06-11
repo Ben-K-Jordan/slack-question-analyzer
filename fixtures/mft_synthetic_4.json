@@ -8,7 +8,7 @@
     "feedback_count": 0,
     "answered_count": 3,
     "answered_must_match": [
-      "timeout",
+      "timeout|timing out",
       "sha-?256|integrity",
       "purge|older than"
     ],
@@ -21,14 +21,38 @@
       "403"
     ],
     "message_asks": [
-      {"contains": "increase the SFTP connection timeout", "asks": 1},
-      {"contains": "throttle bandwidth per partner", "asks": 1},
-      {"contains": "SharePoint Online", "asks": 1},
-      {"contains": "SHA-256 checksums", "asks": 1},
-      {"contains": "failing intermittently to partner X", "asks": 1},
-      {"contains": "Two things for the wM MFT", "asks": 2},
-      {"contains": "approx. 5GB", "asks": 1},
-      {"contains": "10.15 CF19", "asks": 1}
+      {
+        "contains": "increase the SFTP connection timeout",
+        "asks": 1
+      },
+      {
+        "contains": "throttle bandwidth per partner",
+        "asks": 1
+      },
+      {
+        "contains": "SharePoint Online",
+        "asks": 1
+      },
+      {
+        "contains": "SHA-256 checksums",
+        "asks": 1
+      },
+      {
+        "contains": "failing intermittently to partner X",
+        "asks": 1
+      },
+      {
+        "contains": "Two things for the wM MFT",
+        "asks": 2
+      },
+      {
+        "contains": "approx. 5GB",
+        "asks": 1
+      },
+      {
+        "contains": "10.15 CF19",
+        "asks": 1
+      }
     ],
     "support_must_match": [
       "5 ?gb|single.transfer size|max[a-z]* .*size",

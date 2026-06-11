@@ -1,6 +1,15 @@
-# The Question Funnel — Pipeline Spec (v2.36, prompt pack 17, taxonomy v3)
+# The Question Funnel — Pipeline Spec (v2.37, prompt pack 18, taxonomy v3)
 
 > Deltas since the prompts/stages quoted below were written:
+> - Eval round 11 (181/184; fixtures 1, 2, 5, 6 ALL PERFECT; the
+>   single-ask cap killed the 5GB dup first try): the cap's survivor is
+>   now ranked against the '?'-SENTENCE (the lone question mark marks
+>   the asker's actual question), not the whole message — both
+>   candidates can be verbatim-supported, and the symptom rewrite once
+>   beat the real ask on length. VERIFY gains a second TRUE example
+>   (same end-to-end goal in different words) — it had six false
+>   anchors and one true, and the genuinely-borderline onboarding pair
+>   flip-flopped between rounds.
 > - Eval round 10 (179/184; fixtures 1, 2, 5 PERFECT; host-key exactly
 >   3x - the rescue cap worked): the single-ask cap - an UNENUMERATED
 >   message containing at most one '?' asks at most one question; a

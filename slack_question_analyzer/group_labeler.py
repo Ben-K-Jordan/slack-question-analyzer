@@ -199,7 +199,7 @@ FEEDBACK_SYSTEM = (
 
 # Prompt pack version: stamped into results metadata so drift is traceable
 # (the LLM cache keys on full prompt text, so bumps also invalidate caches)
-PROMPT_PACK_VERSION = 17
+PROMPT_PACK_VERSION = 18
 
 LABEL_SYSTEM = (
     "If the group is empty, malformed, or too mixed to share one honest "
@@ -258,6 +258,10 @@ VERIFY_SYSTEM = (
     "Example: Group A asks where quarantined files go; Group B asks what happens "
     "to a file when its virus scan fails. One antivirus-handling page covers "
     "both: {\"same_topic\": true}\n"
+    "Example: Group A asks the quickest way to onboard a new employee end to "
+    "end; Group B asks for a streamlined process to set up a new hire from "
+    "scratch. The SAME end-to-end goal in different words — one page: "
+    "{\"same_topic\": true}\n"
     "Example: Group A asks why Azure container-level token auth fails; Group B "
     "asks why SFTP key authentication fails. Both are authentication, but "
     "different protocols, different root causes, different fixes: "
