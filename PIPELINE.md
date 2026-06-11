@@ -1,4 +1,10 @@
-# The Question Funnel — Pipeline Spec (v2.12.0, prompt pack 3, taxonomy v2)
+# The Question Funnel — Pipeline Spec (v2.13.0, prompt pack 4, taxonomy v2)
+
+> Pack-4 deltas vs the prompts quoted below: EXTRACT adds the intent-verb
+> rule, the sub-steps-aren't-questions rule, and per-question TYPE tags;
+> SUMMARY enforces level discipline (themes-only first sentence, 'evenly
+> spread' only when counts are within 1). Questions typed feature-request
+> leave the support funnel into results['feature_requests'].
 
 How a Slack transcript becomes ranked topics. Design rule throughout: **the
 language model is never asked to do the hard open-ended thing.** Embeddings
