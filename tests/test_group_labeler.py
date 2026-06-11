@@ -394,7 +394,7 @@ def test_answer_detection_counts_resolved_threads(monkeypatch):
              label_group=lambda texts, keywords=None: None,
              verify_same_topic=lambda a, b: None,
              detect_questions=lambda texts: [],
-             is_answered=lambda question, replies: True,
+             is_answered=lambda question, replies, context='': True,
              summarize_analysis=lambda groups, total, themes=None: None)
 
     results = analyzer.analyze_slack_content(content)
@@ -1037,6 +1037,9 @@ def test_under_extraction_recovered_by_widened_safety_net(monkeypatch):
     vectors = {
         'does mft support mutual tls for https partner endpoints?': [1.0, 0.0],
         'can mft post a transfer-complete event to an external kafka topic?': [0.0, 1.0],
+        # The regex fallback may restore the verbatim segment too; after the
+        # same-message collapse only the best-supported survivor remains
+        'also can it post a transfer-complete event to an external kafka topic?': [0.0, 1.0],
     }
     analyzer = make_analyzer(monkeypatch, vectors=vectors, label_groups=True)
 

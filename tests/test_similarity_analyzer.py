@@ -642,11 +642,13 @@ def test_singleton_rescue_absorbs_undergrouped_member(monkeypatch):
     its NEAREST group only; the verifier's yes absorbs it.
     """
     analyzer = make_analyzer(monkeypatch, threshold='0.8')
-    # q0/q1 pair at 0.85; q2 at 0.75 to q0 (under bar, inside rescue margin)
+    # q0/q1 pair at 0.85; q2 averages ~0.76 to the group (under bar,
+    # inside the rescue margin on AVERAGE-link — the same metric
+    # clustering uses, so one close member can't pull in a stranger)
     fake = np.array([
         [1.0, 0.0, 0.0],
         [0.85, float(np.sqrt(1 - 0.85 ** 2)), 0.0],
-        [0.75, 0.0, float(np.sqrt(1 - 0.75 ** 2))],
+        [0.72, 0.167, float(np.sqrt(1 - 0.72 ** 2 - 0.167 ** 2))],
     ])
     monkeypatch.setattr(analyzer, 'get_embeddings_batch',
                         lambda texts, progress_callback=None: fake)
@@ -814,3 +816,37 @@ def test_audit_eviction_needs_verifier_agreement(monkeypatch):
         [[question('a?')], [question('b?')]],
         auditor=lambda texts: [0])
     assert sorted(map(sorted, clusters)) == [[0], [1]]
+
+
+def test_audit_undoes_a_flagged_rescue_without_verifier_overrule(monkeypatch):
+    """Eval rounds 3-5: rescue (verifier YES) -> audit flags the member ->
+    verifier overrules its own second opinion -> mega-group. A rescue is
+    one yes on a borderline add; an audit flag ties the judges 1-1, and a
+    tie reverts: the rescue is undone with NO overrule round."""
+    analyzer = make_analyzer(monkeypatch, threshold='0.8')
+    fake = np.array([
+        [1.0, 0.0, 0.0],
+        [0.85, float(np.sqrt(1 - 0.85 ** 2)), 0.0],
+        [0.72, 0.167, float(np.sqrt(1 - 0.72 ** 2 - 0.167 ** 2))],
+    ])
+    monkeypatch.setattr(analyzer, 'get_embeddings_batch',
+                        lambda texts, progress_callback=None: fake)
+    questions = [question('How do we enforce host key verification?'),
+                 question('Can MFT verify the partner host key first?'),
+                 question('How do I rotate the SSH keys for partners?')]
+
+    # The merge-happy verifier says yes to EVERYTHING (rescue and overrule
+    # alike); the auditor flags the rescued member as an outlier
+    auditor_calls = []
+
+    def auditor(texts):
+        auditor_calls.append(list(texts))
+        return [len(texts) - 1] if len(texts) == 3 else None
+
+    groups = analyzer.group_similar_questions(
+        questions, verifier=lambda a, b: True, auditor=auditor)
+    assert auditor_calls  # the audit ran on the 3x group
+    counts = sorted(g['count'] for g in groups)
+    assert counts == [1, 2]  # rescue undone: tie reverts, no mega-group
+    singleton = next(g for g in groups if g['count'] == 1)
+    assert 'rotate the SSH keys' in singleton['representative_question']

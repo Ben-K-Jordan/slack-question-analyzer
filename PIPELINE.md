@@ -1,6 +1,17 @@
-# The Question Funnel — Pipeline Spec (v2.30, prompt pack 12, taxonomy v3)
+# The Question Funnel — Pipeline Spec (v2.31, prompt pack 13, taxonomy v3)
 
 > Deltas since the prompts/stages quoted below were written:
+> - Eval round 5: the rescue-audit tie rule — a rescue is one verifier
+>   YES on a borderline add; if the audit then flags that member, the
+>   judges are 1-1 and the rescue is UNDONE (no verifier overrule round;
+>   that loop built three mega-groups). Rescue nearness is now AVERAGE
+>   similarity to the group (the clustering metric), not max. The
+>   recovery regex fallback considers every batch message so a half-lost
+>   two-part ask gets its missing '?' half back. is_answered receives the
+>   thread's first message so replies that answer by number ('for #2,
+>   yes') are resolvable. original_message is one canonical string
+>   (cleaned + collapsed + capped) on every path — it is the message's
+>   identity for collapse/ejection/integrity.
 > - Eval round 4 (fixtures 5/6 baselines): routing gains a CONFIDENCE
 >   floor (best anchor < 0.55 -> the closed LLM choice with abstain, so
 >   off-topic/vague questions reach review instead of the closest wrong

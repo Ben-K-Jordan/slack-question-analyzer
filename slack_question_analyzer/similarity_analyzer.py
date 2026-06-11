@@ -482,9 +482,10 @@ class SimilarityAnalyzer:
             # the bar may still belong to an existing group — the verifier
             # decides. Surgical by design: nearest group ONLY, conservative
             # verifier bias, abstain -> stays a singleton.
+            rescued = set()
             if verifier is not None:
-                clusters = self._rescue_singletons(clusters, similarity_matrix,
-                                                   buckets, verifier)
+                clusters, rescued = self._rescue_singletons(
+                    clusters, similarity_matrix, buckets, verifier)
 
             # Final QC: the LLM audits every formed group (any size, however
             # it formed — embeddings OR a borderline merge) and evicts clear
@@ -492,7 +493,8 @@ class SimilarityAnalyzer:
             # unrelated pairs as high as true pairs; the audit is the decider.
             if auditor is not None:
                 clusters = self._audit_clusters(clusters, buckets, auditor,
-                                                verifier=verifier)
+                                                verifier=verifier,
+                                                rescued=rescued)
 
             groups = [self._build_group(indices, buckets, embeddings, similarity_matrix)
                       for indices in clusters]
@@ -678,7 +680,7 @@ class SimilarityAnalyzer:
         return clusters
 
     def _rescue_singletons(self, clusters: List[List[int]], similarity_matrix,
-                           buckets: List[List[Dict]], verifier) -> List[List[int]]:
+                           buckets: List[List[Dict]], verifier):
         """
         A singleton near (but under) the bar is sometimes an under-grouped
         member of an existing cluster and sometimes genuinely unique — the
@@ -687,14 +689,23 @@ class SimilarityAnalyzer:
         adjudicated by the verifier against its nearest group only:
         - never looped against all groups (that would quietly dissolve the
           uniques bucket — over-merge wearing a disguise)
+        - nearness is AVERAGE similarity to the group's members (the same
+          metric clustering uses) — a single close member must not pull in
+          a singleton the rest of the group is far from
         - verifier keeps its conservative doubt-means-no bias
         - abstain/failure -> stays a singleton
+
+        Returns (clusters, rescued_bucket_indices). The rescued set matters
+        downstream: a rescue is one verifier YES on a borderline add, and
+        if the audit then flags that same member, the judges are tied —
+        the audit may undo a rescue without a second overrule round.
         """
         margin = float(os.getenv('LLM_RESCUE_MARGIN', '0.1'))
         max_checks = int(os.getenv('LLM_RESCUE_MAX', '10'))
         multi = [i for i, c in enumerate(clusters) if len(c) >= 2]
+        rescued = set()
         if not multi:
-            return clusters
+            return clusters, rescued
 
         checked = 0
         absorbed = set()
@@ -704,7 +715,8 @@ class SimilarityAnalyzer:
             s = cluster[0]
             best_group, best_sim = None, -1.0
             for gi in multi:
-                sim = max(similarity_matrix[s][j] for j in clusters[gi])
+                members = clusters[gi]
+                sim = sum(similarity_matrix[s][j] for j in members) / len(members)
                 if sim > best_sim:
                     best_group, best_sim = gi, sim
             if best_sim < self.effective_threshold - margin:
@@ -718,13 +730,14 @@ class SimilarityAnalyzer:
                             buckets[s][0]['text'])
                 clusters[best_group].append(s)
                 absorbed.add(si)
+                rescued.add(s)
         if absorbed:
-            return [c for i, c in enumerate(clusters) if i not in absorbed]
-        return clusters
+            return [c for i, c in enumerate(clusters) if i not in absorbed], rescued
+        return clusters, rescued
 
     def _audit_clusters(self, clusters: List[List[int]],
                         buckets: List[List[Dict]], auditor,
-                        verifier=None) -> List[List[int]]:
+                        verifier=None, rescued=None) -> List[List[int]]:
         """
         Final LLM audit of every formed group: evict clear outliers.
 
@@ -740,8 +753,15 @@ class SimilarityAnalyzer:
         is destructive, so it needs TWO judges: the auditor only nominates;
         the verifier must independently confirm the nominee is a different
         topic (explicit False). True/uncertain -> the nominee stays.
+
+        Exception — RESCUED members: the verifier already cast its YES when
+        it approved the rescue, so an audit flag makes the judges 1-1 on a
+        borderline add. The merge-happy verifier must not break that tie in
+        its own favor (that loop built three mega-groups across eval
+        rounds): a flagged rescue is simply undone, back to a singleton.
         """
         max_checks = int(os.getenv('LLM_VERIFY_MAX', '10'))
+        rescued = rescued or set()
         checked = 0
         audited = []
         for cluster in sorted(clusters, key=len, reverse=True):
@@ -755,6 +775,13 @@ class SimilarityAnalyzer:
                     for idx in sorted(nominated):
                         rest_texts = [buckets[j][0]['text']
                                       for j in cluster if j not in nominated][:3]
+                        if idx in rescued:
+                            evicted.add(idx)
+                            logger.info("Audit undid a rescue (judges tied "
+                                        "on a borderline add): %.90r",
+                                        buckets[idx][0]['text'])
+                            audited.append([idx])
+                            continue
                         if verifier is not None and rest_texts:
                             verdict = verifier([buckets[idx][0]['text']], rest_texts)
                             if verdict is not False:
