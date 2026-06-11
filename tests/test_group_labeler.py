@@ -1024,3 +1024,45 @@ def test_cancel_check_fires_before_llm_calls_and_propagates(monkeypatch):
     patch_chat(monkeypatch, ['{"topic": "X", "summary": "y"}'])
     with pytest.raises(Cancelled):
         labeler.label_group(['Some question?'])
+
+
+def test_example_leak_guard():
+    """Few-shot example questions copied into extraction output are
+    contamination — unless the claimed source message genuinely contains
+    the ask, in which case it is a real question and survives."""
+    from slack_question_analyzer.group_labeler import _looks_like_example_leak
+
+    copy_action_msg = ('Seeing this in the server log on 10.15 when a Copy '
+                       'action runs: Transfer aborted unexpectedly. '
+                       'Any idea what triggers this?')
+    # Verbatim prompt example, claimed against an unrelated message: leak
+    assert _looks_like_example_leak(
+        'Can we trigger transfers via REST instead of the scheduler?',
+        copy_action_msg)
+    # Same text, but the source REALLY asks it: not a leak
+    assert not _looks_like_example_leak(
+        'Can we trigger transfers via REST instead of the scheduler?',
+        'Could we trigger transfers via REST instead of the scheduler? '
+        'The scheduler keeps colliding with maintenance windows.')
+    # Ordinary questions never trip the guard
+    assert not _looks_like_example_leak(
+        'How do I rotate SSH keys on a live listener?', copy_action_msg)
+    assert not _looks_like_example_leak('', copy_action_msg)
+
+
+def test_questions_from_llm_filters_example_leaks(monkeypatch):
+    """The extraction funnel drops leaked examples and counts them."""
+    labeler = GroupLabeler('ollama')
+    monkeypatch.setattr(labeler, '_generate_json', lambda *a, **k: {
+        'questions': [
+            {'index': 0, 'question': 'How do I increase the SFTP timeout?',
+             'type': 'how-to'},
+            {'index': 0, 'question': 'Can we trigger transfers via REST '
+                                     'instead of the scheduler?',
+             'type': 'is-it-possible'},
+        ]})
+    found = labeler.extract_questions(
+        ['How do I increase the SFTP timeout? Transfers keep timing out.'])
+    assert [f['question'] for f in found] == [
+        'How do I increase the SFTP timeout?']
+    assert labeler.stats.get('extract_example_leaks') == 1

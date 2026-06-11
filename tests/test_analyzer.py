@@ -174,8 +174,51 @@ def test_same_message_rephrasings_collapse(analyzer):
     kept = analyzer._collapse_same_message_rephrasings(questions)
     texts = [k['text'] for k in kept]
     assert len(kept) == 4
-    assert 'Why does the Copy Task to Target System fail due to an antivirus scanning error?' not in texts
-    assert texts.count('What is the antivirus scanning error when copying to Target System?') == 2
+    # Exactly ONE of the two m1 rewrites survives (which one is decided by
+    # source support, then completeness — not input order)
+    m1_texts = [t for t in texts if 'antivirus' in t]
+    assert len([k for k in kept if k['original_message'] == 'm1']) == 1
+    # The m3 repeat (identical text, different message) always survives
+    assert any(k['original_message'] == 'm3' for k in kept)
+    assert len(m1_texts) == 2  # one from m1 + the m3 repeat
+
+
+def test_rephrasing_collapse_keeps_best_supported_phrasing(analyzer):
+    """When two rephrasings collapse, the survivor is the one the source
+    message vouches for — an extraction that borrowed vocabulary from
+    elsewhere (prompt examples, neighbor messages) must not win even when
+    it comes first."""
+    source = ('Customer wants to bulk-deactivate a set of scheduled actions. '
+              'Is there an existing API or UI option to disable many at once?')
+
+    def q(text):
+        return {'text': text, 'normalized_text': text.lower(),
+                'original_message': source}
+
+    contaminated = q('Is there a way to bulk-disable actions in MFT?')
+    genuine = q('Is there an existing API or UI option to bulk-deactivate '
+                'a set of scheduled actions?')
+    kept = analyzer._collapse_same_message_rephrasings([contaminated, genuine])
+    assert [k['text'] for k in kept] == [genuine['text']]
+    # Provenance records the dropped phrasing
+    assert any(d['text'] == contaminated['text'] for d in analyzer._dropped)
+
+
+def test_template_boilerplate_does_not_collapse_distinct_asks(analyzer):
+    """Fixture-4 regression class: two DIFFERENT asks rewritten onto one
+    template ('Can we X in wM MFT (SaaS)?' / 'Can we Y in wM MFT (SaaS)?')
+    share only filler and product boilerplate — that is zero same-ask
+    evidence and both must survive the lexical pass."""
+    def q(text):
+        return {'text': text, 'normalized_text': text.lower(),
+                'original_message': 'm-two-things'}
+
+    questions = [
+        q('Can we set per-folder retention policies in wM MFT (SaaS)?'),
+        q('Can we auto-purge files older than N days in wM MFT (SaaS)?'),
+    ]
+    kept = analyzer._collapse_same_message_rephrasings(questions)
+    assert len(kept) == 2
 
 
 def test_date_collision_phantom_dropped(analyzer):
