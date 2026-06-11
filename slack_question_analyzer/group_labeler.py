@@ -107,13 +107,23 @@ DETECT_SCHEMA = {
 
 ANSWERED_SCHEMA = {
     'type': 'object',
-    'properties': {'answered': {'type': 'boolean'}},
-    'required': ['answered'],
+    'properties': {'verdict': {'type': 'string',
+                               'enum': ['answered', 'unanswered', 'unknown']}},
+    'required': ['verdict'],
 }
 
+# Prompt pack version: stamped into results metadata so drift is traceable
+# (the LLM cache keys on full prompt text, so bumps also invalidate caches)
+PROMPT_PACK_VERSION = 2
+
 LABEL_SYSTEM = (
-    "You label groups of similar support questions from a Slack channel.\n"
+    "If the group is empty, malformed, or too mixed to share one honest "
+    "label, respond {\"topic\": \"NEEDS_REVIEW\", \"summary\": \"\"} and "
+    "nothing else. Do not guess.\n\n"
+    "You name a group of related support questions with a short topic label.\n"
     "Rules:\n"
+    "- Topic: 2-4 words, Title Case, using words that ACTUALLY APPEAR in the "
+    "questions — do not introduce new vocabulary.\n"
     "- The topic must name the SPECIFIC feature, system, or task being asked about.\n"
     "- Never use vague topics like 'General Questions', 'Help', 'Miscellaneous', "
     "'Various Issues', or 'Technical Questions'.\n"
@@ -122,8 +132,7 @@ LABEL_SYSTEM = (
     "- Never start the topic with 'How to' — it is a category name, not a question.\n"
     "- Keep exact product and feature terms from the questions (don't paraphrase "
     "technical names).\n"
-    "- Topic: 2-4 words, Title Case. Summary: one sentence describing what people "
-    "are asking.\n"
+    "- Summary: one sentence describing what people are asking.\n"
     "- Respond with JSON only."
 )
 
@@ -148,33 +157,47 @@ Answer: {"topic": "MFT UI Errors", "summary": "Users hit internal errors and exc
 Now label this group."""
 
 VERIFY_SYSTEM = (
-    "You are a strict deduplicator of support-question topics. Two groups are "
-    "the same topic ONLY if a single documentation page or how-to answer would "
-    "resolve both groups' questions. Sharing the same product, the same general "
-    "area, or the same vocabulary does NOT make them the same topic. When in "
-    "doubt, answer false.\n\n"
+    "If either group is empty or malformed, answer {\"same_topic\": false} "
+    "and nothing else. Do not guess.\n\n"
+    "You decide whether two groups of support questions are about the SAME "
+    "topic.\n"
+    "The test: would ONE documentation page, fixing ONE root cause, resolve "
+    "every question in both groups? If yes -> same topic. If they would need "
+    "different pages or different fixes -> different topics.\n"
+    "Same product, same feature area, or shared vocabulary do NOT make two "
+    "groups the same topic — only a shared root cause does. When in doubt, "
+    "answer false.\n\n"
     "Example: Group A asks how the metering agent gets installed; Group B asks "
-    "how to set up monitoring alerts. Same product, different features: "
+    "how to set up monitoring alerts. Same product, different root causes: "
     "{\"same_topic\": false}\n"
     "Example: Group A asks where quarantined files go; Group B asks what happens "
-    "to a file when its virus scan fails: {\"same_topic\": true}\n"
+    "to a file when its virus scan fails. One antivirus-handling page covers "
+    "both: {\"same_topic\": true}\n"
+    "Example: Group A asks why Azure container-level token auth fails; Group B "
+    "asks why SFTP key authentication fails. Both are authentication, but "
+    "different protocols, different root causes, different fixes: "
+    "{\"same_topic\": false}\n"
     "Example: Group A asks about triggering transfers via REST API; Group B asks "
-    "about scheduling recurring transfers: {\"same_topic\": false}\n"
-    "Example: Group A asks about resetting passwords; Group B asks about "
-    "resetting API keys: {\"same_topic\": false}\n\n"
+    "about scheduling recurring transfers: {\"same_topic\": false}\n\n"
     "Respond with JSON only."
 )
 
 # The audit has the OPPOSITE bias to VERIFY_SYSTEM: these questions were
-# already matched, so evicting needs confidence, keeping doesn't. A strict
-# doubt-means-no rule here would shred legitimate groups.
+# already matched, so evicting needs confidence, keeping doesn't. Same
+# yardstick as merging, opposite tie-breaker — that's what keeps the two
+# passes from fighting each other.
 AUDIT_SYSTEM = (
-    "You quality-check a group of support questions that were matched as being "
-    "about one topic. List the numbers of any questions that are CLEARLY about "
-    "a different feature or task than the rest of the group. Differences in "
-    "wording, angle, or detail level do NOT make a question an outlier — only "
-    "a different subject does. If the group is coherent, or you are unsure, "
-    "return an empty list.\n\n"
+    "If the group is empty or malformed, return {\"outliers\": []} and "
+    "nothing else. Do not guess.\n\n"
+    "You quality-check a group of support questions that were matched as one "
+    "topic, and flag any that do not belong.\n"
+    "Apply the same test as merging: would ONE documentation page, fixing ONE "
+    "root cause, resolve the whole group? List the numbers of questions that "
+    "fall OUTSIDE that page.\n"
+    "A question is an outlier only if it is about a DIFFERENT subject "
+    "(different feature, different root cause) than the rest. Differences in "
+    "wording, phrasing, or angle do NOT make a question an outlier.\n"
+    "If every question belongs, or you are unsure, return an empty list.\n\n"
     "Example: 1. How do I install the metering agent? 2. How do I set up "
     "monitoring alerts? 3. Can monitoring alert on one application? "
     "Question 1 is about metering, the rest about monitoring/alerting: "
@@ -195,30 +218,43 @@ ROUTE_SCHEMA = {
 # one number, no inventing. Used only for questions whose top-2 anchor
 # similarities are too close for embeddings to decide alone.
 ROUTE_SYSTEM = (
-    "You sort one support question into exactly one category. Reply with only "
-    "the category number. If unsure, pick the closest; never invent a new "
-    "number.\nRespond with JSON only: {\"category\": <number>}"
+    "If the question is empty, malformed, or you cannot decide with "
+    "confidence, reply {\"category\": 0}. Do not guess.\n\n"
+    "You sort ONE support question into exactly one category. Reply with only "
+    "the category number.\n"
+    "If the question fits two categories almost equally, OR fits none of them "
+    "well, reply 0.\n"
+    "Never invent a number. Never explain.\n"
+    "Respond with JSON only: {\"category\": <number>}"
 )
 
 THEMES_SYSTEM = (
+    "If the list is empty or malformed, return {\"themes\": []} and nothing "
+    "else. Do not guess.\n\n"
     "You organize support-question topics into broad themes for an executive "
-    "funnel view. Produce 3 to 6 themes with short names (1-3 words, e.g. "
-    "'Transfers & APIs', 'Security', 'Monitoring'). Assign EVERY numbered item "
-    "to exactly one theme by its number. Do not invent themes for single "
-    "stragglers if a broader existing theme fits.\n"
+    "funnel view. Produce 2 to 6 themes (fewer is better) with short names "
+    "(1-3 words, Title Case, drawn from the items' own vocabulary). Assign "
+    "EVERY numbered item to exactly one theme by its number. Group by shared "
+    "subject area (would the same team own them?), not surface word overlap. "
+    "Do not invent themes for single stragglers if a broader existing theme "
+    "fits.\n"
     "Respond with JSON only: {\"themes\": [{\"name\": \"...\", "
     "\"items\": [1, 4, 7]}]}"
 )
 
 SUMMARY_SYSTEM = (
+    "If the topic list is empty or malformed, or you cannot summarize "
+    "faithfully using only the listed topics and their exact counts, respond "
+    "{\"summary\": \"NEEDS_REVIEW\"} and nothing else. Do not guess.\n\n"
     "You write a brief executive summary of support-question analytics for a team lead. "
-    "2-3 sentences: the dominant themes, with concrete topic names and counts. "
+    "1-2 sentences: the dominant themes, with concrete topic names and counts. "
     "No filler, no preamble, no advice.\n"
     "Rules:\n"
     "- Mention ONLY topics that appear in the list. NEVER invent or add a "
     "topic that is not listed, even to fill out a sentence.\n"
-    "- Use ONLY each topic's own question count exactly as listed. The total "
-    "question count is NOT a topic's count — never attach it to a topic.\n"
+    "- Use ONLY each topic's own question count exactly as listed. Do not "
+    "estimate, round, or infer counts. The total question count is NOT a "
+    "topic's count — never attach it to a topic.\n"
     "- Mention topics in the order listed (they are ranked).\n"
     "- If the list has a single topic, summarize that one topic and say the "
     "rest of the questions were each asked once.\n"
@@ -231,65 +267,89 @@ SUMMARY_SYSTEM = (
 )
 
 DETECT_SYSTEM = (
-    "You find questions and requests for help in Slack messages that don't use "
-    "question words or question marks (for example: 'I can't get the webhook to work, "
-    "been stuck all day' is a request for help).\n"
-    "For each message that asks for help or information, rewrite it as a clear, short "
-    "question. Skip statements, status updates, and answers. Messages may be in any "
-    "language: keep the rewritten question in its original language.\n"
+    "If the messages are empty, malformed, or you cannot proceed with "
+    "confidence, return {\"questions\": []} and nothing else. Do not guess.\n\n"
+    "You find IMPLICIT requests for help — problems stated as complaints or "
+    "symptoms that imply the writer wants a solution, even with no question "
+    "mark.\n"
+    "An implicit request exists if the writer describes something broken, "
+    "blocked, failing, or behaving unexpectedly in a way that implies they "
+    "want it resolved.\n"
+    "IS an implicit request: 'can't get the copy task to fire, stuck all "
+    "day', 'metering numbers don't match the report', 'the transfer just "
+    "hangs'.\n"
+    "NOT an implicit request: announcements ('deployed the fix, all green'), "
+    "opinions, status updates without a problem, social chat, answers.\n"
+    "Rewrite each implicit request as ONE standalone question. Preserve "
+    "technical tokens exactly; keep each question in its original language.\n"
     "Respond with JSON only: {\"questions\": [{\"index\": <message number>, "
     "\"question\": \"<the rewritten question>\"}]}. Use an empty list if none qualify."
 )
 
 EXTRACT_SYSTEM = (
-    "You extract every question and request for help from Slack messages.\n"
+    "If the messages are empty, malformed, or contain no request for help, "
+    "return {\"questions\": []} and nothing else. Do not guess.\n\n"
+    "You extract answerable questions from support chat messages.\n"
+    "Classify each candidate sentence:\n"
+    "- REAL: the writer wants information, a fix, or a yes/no confirmation. KEEP.\n"
+    "- RHETORICAL: shaped like a question but seeks no answer ('Any "
+    "thoughts?', 'Right?', 'Make sense?', 'Is there any way around this?', "
+    "'Anyone?'). DROP.\n"
+    "- CONTEXT: a statement describing their setup, environment, or what they "
+    "already tried. Not a question — DROP it, but USE its facts to make the "
+    "REAL questions standalone.\n"
+    "Rewrite every REAL question as a single standalone question.\n"
+    "Standalone test: a reader who never saw the message can answer it "
+    "without asking what 'it', 'this', 'they', or 'the platform' refers to — "
+    "pull the subject into the question explicitly. Drop greetings, "
+    "signatures, and bullet characters.\n"
     "Rules:\n"
-    "- Rewrite each one as a clear, self-contained question, dropping greetings "
-    "('Hi team'), signatures, bullet characters, and filler.\n"
-    "- Self-contained means understandable with no other context: pull the "
-    "subject (product, feature, file, error) into the question from the rest "
-    "of the message. 'Can we configure the following tasks to do this?' is "
-    "NOT self-contained.\n"
-    "- Skip pure conversational filler that has no subject even in context "
-    "('Any thoughts?', 'Is there any way around this?', 'Anyone?').\n"
-    "- Keep exact technical terms, product names, error messages, and version numbers "
-    "verbatim — never paraphrase or invent details that aren't in the message.\n"
-    "- A message may contain several questions: output one entry per question, "
-    "repeating the message number.\n"
-    "- Implicit help requests count.\n"
-    "- Skip statements, status updates, headers, and answers.\n"
-    "- Messages may be in any language: keep the rewritten question in its "
-    "original language.\n"
+    "- A message often contains MORE THAN ONE real question: output one entry "
+    "per REAL question, repeating the message number. Implicit help requests "
+    "count as REAL.\n"
+    "- Preserve technical tokens exactly as written: error strings, API "
+    "names, product names, version numbers, file names. Never normalize, "
+    "paraphrase, or invent them.\n"
+    "- Messages may be in any language: keep each question in its original "
+    "language.\n"
     "Respond with JSON only: {\"questions\": [{\"index\": <message number>, "
-    "\"question\": \"<the question>\"}]}. Use an empty list if none qualify."
+    "\"question\": \"<standalone question>\"}]}. Use an empty list if none qualify."
 )
 
 EXTRACT_FEW_SHOT = """Example messages:
 0. Hi all! Quick one — can we trigger transfers via REST instead of the scheduler? Also is there a way to bulk-disable actions?
 1. Deployed the fix to prod this morning, all green.
-2. been fighting the SFTP connection all day, keeps refusing, no idea why
-3. The proxy keeps stripping our auth header. * can we pin the header? Is there any way around this? Anyone have any thoughts?
+2. Re: wM MFT (SaaS), customer product feedback. They would like to 1. See a graphical representation of the Action log showing status of each task. 2. Is there a way to group Actions and filter by group name? Any thoughts?
 
-Example answer: {"questions": [
+Correct answer: {"questions": [
 {"index": 0, "question": "Can we trigger transfers via REST instead of the scheduler?"},
 {"index": 0, "question": "Is there a way to bulk-disable actions?"},
-{"index": 2, "question": "Why does my SFTP connection keep getting refused?"},
-{"index": 3, "question": "Can we pin the auth header so the proxy stops stripping it?"}]}
+{"index": 2, "question": "Can the wM MFT (SaaS) Action log show a graphical representation of each task's status?"},
+{"index": 2, "question": "Can Actions in wM MFT (SaaS) be grouped and filtered by group name?"}]}
 
-(Note how message 3 yields ONE self-contained question: the bullet is folded
-into the subject, and the contentless follow-ups are skipped.)
+DO NOT answer message 2 like this: {"index": 2, "question": "They want to see the action log and group actions, any thoughts?"}
+Wrong because: 'Any thoughts?' is RHETORICAL and must be dropped; the two REAL questions must be split into two entries; 'they' must be made explicit using the CONTEXT sentence.
 
 Now extract from these messages."""
 
 ANSWERED_SYSTEM = (
-    "You decide whether the replies in a Slack thread actually answered the question.\n"
-    "A reply that only acknowledges, asks for more details, says 'I'll look into it', "
-    "or links elsewhere without substance does NOT count as an answer.\n"
-    "Example: question 'How do I reset my password?', reply 'Settings > Security > "
-    "Reset, then check your email.' Answer: {\"answered\": true}\n"
-    "Example: question 'Why did my transfer fail?', reply 'Hmm, let me check with the "
-    "team.' Answer: {\"answered\": false}\n"
-    "Respond with JSON only."
+    "If the thread is empty or malformed, respond {\"verdict\": \"unknown\"} "
+    "and nothing else. Do not guess.\n\n"
+    "You decide whether a question in a chat thread was actually ANSWERED by "
+    "the replies.\n"
+    "A question is ANSWERED only if a reply contains specific, actionable "
+    "information: a setting, a command, an API or endpoint, a config value, "
+    "a yes/no WITH a reason, or a link to the exact relevant doc.\n"
+    "The following are NOT answers, even if friendly or on-topic: "
+    "acknowledgments ('thanks', 'good question', 'same here'); promises "
+    "('let me check', 'I'll get back to you', 'looping in X'); asking for "
+    "more details; restating or clarifying the problem; unrelated chatter.\n"
+    "Example: question 'How do I reset my password?', reply 'Settings > "
+    "Security > Reset, then check your email.': {\"verdict\": \"answered\"}\n"
+    "Example: question 'Why did my transfer fail?', reply 'Hmm, let me check "
+    "with the team.': {\"verdict\": \"unanswered\"}\n"
+    "Respond with JSON only: {\"verdict\": \"answered\"}, "
+    "{\"verdict\": \"unanswered\"}, or {\"verdict\": \"unknown\"}."
 )
 
 
@@ -338,7 +398,10 @@ class GroupLabeler:
     def _system(self, base: str) -> str:
         """System prompt with the optional domain context appended."""
         if self.domain_context:
-            return f"{base}\nContext: the messages come from {self.domain_context}."
+            return (f"{base}\nContext: the messages come from "
+                    f"{self.domain_context}. Technical terms, error strings, "
+                    f"API names, product names, and version numbers must be "
+                    f"preserved exactly.")
         return base
 
     # ------------------------------------------------------------------
@@ -524,6 +587,8 @@ class GroupLabeler:
         summary = str(data.get('summary', '')).strip()
         if not topic:
             return 'topic was empty'
+        if topic.upper() == 'NEEDS_REVIEW':
+            return None  # the model's honest abstain is a valid answer
         words = [w.strip('.,!?').lower() for w in topic.split()]
         if all(w in GENERIC_TOPIC_WORDS for w in words):
             return f"topic '{topic}' is too generic"
@@ -555,6 +620,8 @@ class GroupLabeler:
             return None
 
         topic = str(data['topic']).strip()
+        if topic.upper() == 'NEEDS_REVIEW':
+            return None  # abstained: callers fall back, nothing gets banked
         topic_words = topic.split()
         if len(topic_words) > MAX_TOPIC_WORDS:
             topic = ' '.join(topic_words[:MAX_TOPIC_WORDS])
@@ -599,7 +666,8 @@ class GroupLabeler:
                       candidates: List[Dict]) -> Optional[int]:
         """
         Closed-choice adjudication for an ambiguously routed question.
-        candidates: [{'id': int, 'name': str}]. Returns the chosen id, or
+        candidates: [{'id': int, 'name': str}]. Returns the chosen id;
+        0 when the model abstains (fits both/neither — quarantine it);
         None on failure/invalid answer (callers fall back to the embedding
         favorite).
         """
@@ -610,6 +678,8 @@ class GroupLabeler:
         if data is None:
             return None
         chosen = data.get('category')
+        if chosen == 0:
+            return 0  # honest abstain — the caller's review pile, not a guess
         if isinstance(chosen, int) and any(c['id'] == chosen for c in candidates):
             return chosen
         return None
@@ -652,7 +722,10 @@ class GroupLabeler:
         )
         if data is None:
             return None
-        return str(data['summary']).strip()
+        summary = str(data['summary']).strip()
+        if summary.upper() == 'NEEDS_REVIEW':  # the model's honest abstain
+            return None
+        return summary
 
     def detect_questions(self, message_texts: List[str]) -> List[Dict]:
         """
@@ -703,6 +776,11 @@ class GroupLabeler:
             '\n\nWas the question answered by these replies?'
         )
         data = self._generate_json(self._system(ANSWERED_SYSTEM), user, ANSWERED_SCHEMA, max_tokens=60)
-        if data is None or not isinstance(data.get('answered'), bool):
+        if data is None:
             return None
-        return data['answered']
+        verdict = str(data.get('verdict', '')).strip().lower()
+        if verdict == 'answered':
+            return True
+        if verdict == 'unanswered':
+            return False
+        return None  # 'unknown' or malformed: abstain

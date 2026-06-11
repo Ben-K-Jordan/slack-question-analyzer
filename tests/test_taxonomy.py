@@ -192,3 +192,11 @@ def test_taxonomy_groups_within_bucket_at_relaxed_bar(taxonomy_analyzer, monkeyp
     group = results['groups'][0]
     assert group['theme'] == 'File Operations'
     assert group['bucket'] == 'Antivirus'
+
+
+def test_choose_bucket_zero_is_honest_abstain(monkeypatch, tmp_path):
+    """Reply 0 = fits both/neither -> quarantine, never a forced guess."""
+    monkeypatch.setenv('LLM_CACHE_DIR', str(tmp_path / 'llm'))
+    patch_chat(monkeypatch, '{"category": 0}')
+    assert GroupLabeler('ollama').choose_bucket(
+        'q?', [{'id': 1, 'name': 'A'}, {'id': 2, 'name': 'B'}]) == 0

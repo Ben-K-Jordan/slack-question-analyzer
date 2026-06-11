@@ -13,7 +13,7 @@ import numpy as np
 from dotenv import load_dotenv
 from .question_extractor import QuestionExtractor
 from .similarity_analyzer import SimilarityAnalyzer
-from .group_labeler import GroupLabeler
+from .group_labeler import GroupLabeler, PROMPT_PACK_VERSION
 from .topic_bank import TopicBank
 from .taxonomy import Taxonomy, route_questions
 from .exporters import to_csv, to_markdown
@@ -344,6 +344,12 @@ class QuestionAnalyzer:
                                'name': taxonomy.bucket_name(k)}
                               for k in candidate_indices]
                 chosen_id = adjudicate(questions[qi]['text'], candidates)
+                if chosen_id == 0:
+                    # The model abstained (fits both/neither): quarantine —
+                    # a pooling review pile beats scattered wrong guesses,
+                    # and a growing pile means a category is missing
+                    outliers.append(qi)
+                    continue
                 if chosen_id is not None:
                     choice = next((k for k in candidate_indices
                                    if taxonomy.buckets[k]['id'] == chosen_id), None)
@@ -534,6 +540,7 @@ class QuestionAnalyzer:
             # Routing health (taxonomy runs): rising 'needs_review' over time
             # means the taxonomy is drifting out of sync with real traffic
             'routing': self._last_routing,
+            'prompt_pack': PROMPT_PACK_VERSION,
         }
 
     @staticmethod
