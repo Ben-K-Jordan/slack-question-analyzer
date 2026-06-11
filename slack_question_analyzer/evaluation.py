@@ -233,6 +233,49 @@ def evaluate_transcript(analyzer, fixture: Dict) -> Dict:
               'recurring groups: ' + (', '.join(g['representative_question'][:60]
                                                 for g in groups) or 'none'))
 
+    # Named recurrences with exact occurrence counts: each spec must find a
+    # recurring group matching every pattern AND showing exactly that count
+    for spec in expect.get('recurring_groups', []):
+        patterns = [re.compile(p, re.IGNORECASE) for p in spec['must_match']]
+        matching = [g for g in groups
+                    if all(any(rx.search(t) for t in texts(g['questions']))
+                           for rx in patterns)]
+        ok = any(g['count'] == spec['count'] for g in matching)
+        check(f"recurrence /{' & '.join(spec['must_match'])}/ = "
+              f"{spec['count']}x", ok,
+              'matching groups: ' + (', '.join(
+                  f"{g['count']}x {g['representative_question'][:50]}"
+                  for g in matching) or 'none'))
+
+    # Genuine singletons the rescue pass must leave alone: the question must
+    # survive (matches a support row) but sit in NO recurring group
+    for pattern in expect.get('must_stay_singleton', []):
+        rx = re.compile(pattern, re.IGNORECASE)
+        survived = any_match(pattern, support)
+        grouped = [g for g in groups
+                   if any(rx.search(t) for t in texts(g['questions']))]
+        check(f'/{pattern}/ stays a singleton', survived and not grouped,
+              ('absorbed into: ' + '; '.join(g['representative_question'][:60]
+                                             for g in grouped))
+              if grouped else 'no surviving support question matches')
+
+    # Answered metric (threads): count plus per-question membership via the
+    # 'answered' flag answer detection writes onto each question
+    if 'answered_count' in expect:
+        got = results.get('answered_questions', 0)
+        check(f"answered = {expect['answered_count']}",
+              got == expect['answered_count'], f'got {got}')
+    answered_rows = [r for r in support if r.get('answered') is True]
+    for pattern in expect.get('answered_must_match', []):
+        check(f'answered includes /{pattern}/', any_match(pattern, answered_rows),
+              'answered: ' + (', '.join(t[:60] for t in texts(answered_rows))
+                              or 'none'))
+    for pattern in expect.get('answered_must_not_match', []):
+        bad = [t for t in texts(answered_rows)
+               if re.search(pattern, t, re.IGNORECASE)]
+        check(f'answered excludes /{pattern}/', not bad,
+              '; '.join(t[:70] for t in bad))
+
     if 'feedback_count' in expect:
         check(f"product feedback = {expect['feedback_count']}",
               len(feedback) == expect['feedback_count'],
@@ -273,6 +316,21 @@ def evaluate_transcript(analyzer, fixture: Dict) -> Dict:
                   and any(rx_b.search(t) for t in texts(g['questions']))]
         check(f'/{a}/ and /{b}/ not merged', not merged,
               '; '.join(g['representative_question'][:70] for g in merged))
+
+    # Occurrence integrity, asserted on EVERY transcript fixture: a group's
+    # count must equal its populated rows, and a 2+ count needs rows from
+    # distinct source messages (identical forwarded text exempt)
+    bad_groups = []
+    for g in groups:
+        rows = [q for q in g['questions'] if (q.get('text') or '').strip()]
+        sources = {q.get('original_message') for q in rows}
+        distinct_texts = {q.get('normalized_text') or q.get('text') for q in rows}
+        if len(rows) != g['count'] or (len(sources) < 2
+                                       and len(distinct_texts) > 1):
+            bad_groups.append(f"{g['count']}x {g['representative_question'][:50]}"
+                              f" ({len(rows)} rows, {len(sources)} sources)")
+    check('every count provable (rows populated, sources distinct)',
+          not bad_groups, '; '.join(bad_groups))
 
     # A repair firing means a count-without-rows leaked to the exit
     # invariant — defensive code saved the render, but the leak is a bug

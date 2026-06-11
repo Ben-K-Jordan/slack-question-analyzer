@@ -222,3 +222,109 @@ def test_shipped_mft_fixture_1_markers_resolve():
 def test_shipped_mft_fixture_2_markers_resolve():
     _markers_resolve('fixtures/mft_test_transcript_2.txt',
                      'fixtures/mft_synthetic_2.json')
+
+
+def test_shipped_mft_fixture_3_markers_resolve():
+    _markers_resolve('fixtures/mft_test_transcript_3.txt',
+                     'fixtures/mft_synthetic_3.json')
+
+
+def test_shipped_mft_fixture_4_markers_resolve():
+    _markers_resolve('fixtures/mft_test_transcript_4.txt',
+                     'fixtures/mft_synthetic_4.json')
+
+
+def test_evaluate_transcript_recurring_groups_and_singletons(tmp_path):
+    host_key = [
+        _row('How do we enforce host key verification?', 'src-a'),
+        _row('Can MFT verify the partner host key?', 'src-b'),
+        _row('Setting to require host key checking?', 'src-c')]
+    results = {
+        'total_questions': 5,
+        'total_groups': 1,
+        'groups': [{'count': 3, 'representative_question': host_key[0]['text'],
+                    'questions': host_key}],
+        'ungrouped_questions': [
+            _row('Google Cloud Storage as a destination?', 'src-d'),
+            _row('Rotate PGP encryption keys?', 'src-e')],
+        'feature_requests': [],
+        'metadata': {'llm_stats': {}},
+    }
+    fixture = _transcript_fixture(tmp_path, {
+        'recurring_groups': [
+            {'must_match': ['host key'], 'count': 3},
+            {'must_match': ['onboard|new partner'], 'count': 2}],
+        'must_stay_singleton': ['google cloud', 'sharepoint'],
+    })
+    result = evaluate_transcript(_StubAnalyzer(results), fixture)
+    by_name = {c['name']: c['ok'] for c in result['checks']}
+    assert by_name['recurrence /host key/ = 3x']
+    assert not by_name['recurrence /onboard|new partner/ = 2x']  # missing
+    assert by_name['/google cloud/ stays a singleton']
+    # Vacuous pass forbidden: a dropped question is not a "singleton"
+    assert not by_name['/sharepoint/ stays a singleton']
+
+    # Wrong count on a named recurrence must fail even though the group exists
+    fixture2 = _transcript_fixture(tmp_path, {
+        'recurring_groups': [{'must_match': ['host key'], 'count': 2}]})
+    result2 = evaluate_transcript(_StubAnalyzer(results), fixture2)
+    assert result2['failed'] == 1
+    # A singleton absorbed into a group must fail
+    fixture3 = _transcript_fixture(tmp_path, {
+        'must_stay_singleton': ['partner host key']})
+    result3 = evaluate_transcript(_StubAnalyzer(results), fixture3)
+    assert result3['failed'] == 1
+
+
+def test_evaluate_transcript_answered_checks(tmp_path):
+    results = {
+        'total_questions': 3,
+        'total_groups': 0,
+        'groups': [],
+        'ungrouped_questions': [
+            _row('How to increase the connection timeout?', 'src-a', answered=True),
+            _row('Throttle bandwidth per partner?', 'src-b', answered=False),
+            _row('SharePoint Online as destination?', 'src-c')],
+        'feature_requests': [],
+        'answered_questions': 1,
+        'metadata': {'llm_stats': {}},
+    }
+    fixture = _transcript_fixture(tmp_path, {
+        'answered_count': 1,
+        'answered_must_match': ['timeout'],
+        'answered_must_not_match': ['throttle', 'sharepoint'],
+    })
+    result = evaluate_transcript(_StubAnalyzer(results), fixture)
+    assert result['failed'] == 0, format_transcript_report(result)
+
+    results['ungrouped_questions'][1]['answered'] = True
+    results['answered_questions'] = 2
+    result = evaluate_transcript(_StubAnalyzer(results), fixture)
+    failed = {c['name'] for c in result['checks'] if not c['ok']}
+    assert 'answered = 1' in failed
+    assert 'answered excludes /throttle/' in failed
+
+
+def test_evaluate_transcript_occurrence_integrity_always_on(tmp_path):
+    # A 2x group whose rows share ONE source message and differ in text:
+    # the phantom-recurrence signature, failed without any expect key
+    twins = [_row('Can we purge old records?', 'same-msg'),
+             _row('What is the cleanup process for old records?', 'same-msg')]
+    results = {
+        'total_questions': 2,
+        'total_groups': 1,
+        'groups': [{'count': 2, 'representative_question': twins[0]['text'],
+                    'questions': twins}],
+        'ungrouped_questions': [],
+        'feature_requests': [],
+        'metadata': {'llm_stats': {}},
+    }
+    fixture = _transcript_fixture(tmp_path, {})
+    result = evaluate_transcript(_StubAnalyzer(results), fixture)
+    failed = {c['name'] for c in result['checks'] if not c['ok']}
+    assert 'every count provable (rows populated, sources distinct)' in failed
+
+    # Identical forwarded text from one source is the documented exemption
+    twins[1]['text'] = twins[0]['text']
+    result = evaluate_transcript(_StubAnalyzer(results), fixture)
+    assert result['failed'] == 0, format_transcript_report(result)
