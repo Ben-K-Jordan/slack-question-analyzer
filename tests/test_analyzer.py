@@ -491,3 +491,42 @@ def test_restatement_marker_collapses_zero_overlap_rephrase(analyzer):
               'normalized_text': 'basically can transfers resume after an interruption?',
               'original_message': 'OTHER'}]
     assert len(analyzer._collapse_same_message_rephrasings(cross)) == 2
+
+
+def test_single_ask_cap_on_unenumerated_single_question_mark_message(analyzer):
+    """Invariant: an unenumerated message with at most one '?' asks at most
+    one question — a second extraction is the model rewriting context into
+    an extra ask. Enumerated messages and multi-'?' messages are exempt."""
+    capped_source = ('Customer on 10.15.2 wants to know if MFT can handle '
+                     'files approx. 5GB in size. Is there a max size?')
+    enum_source = ('Two things: 1. Can we set retention policies? '
+                   '2. Can we auto-purge old files?')
+    multi_q_source = 'Can we do X? And how do we configure Y?'
+
+    def q(text, source):
+        return {'text': text, 'normalized_text': text.lower(),
+                'original_message': source}
+
+    questions = [
+        q('Is there a max single-transfer size limit?', capped_source),
+        q('Does MFT handle very large payloads approx. 5GB?', capped_source),
+        q('Can we set retention policies?', enum_source),
+        q('Can we auto-purge old files?', enum_source),
+        q('Can we do X?', multi_q_source),
+        q('How do we configure Y?', multi_q_source),
+    ]
+    kept = analyzer._enforce_single_ask_cap(questions)
+    texts = [k['text'] for k in kept]
+    # Capped message: one survivor (best source support wins)
+    assert sum(1 for k in kept if k['original_message'] == capped_source) == 1
+    # Enumerated and multi-'?' messages keep both asks
+    assert 'Can we set retention policies?' in texts
+    assert 'Can we auto-purge old files?' in texts
+    assert 'Can we do X?' in texts and 'How do we configure Y?' in texts
+    assert any('extra extraction' in d['reason'] for d in analyzer._dropped)
+
+    # Truncated sources (at the 200-char cap) are exempt: clipping can hide
+    # the '?'s and enumeration markers that prove multiple asks
+    long_source = ('x' * 199 + 'y')[:200]
+    pair = [q('First ask?', long_source), q('Second ask?', long_source)]
+    assert len(analyzer._enforce_single_ask_cap(pair)) == 2
