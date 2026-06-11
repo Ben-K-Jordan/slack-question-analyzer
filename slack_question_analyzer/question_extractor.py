@@ -339,7 +339,17 @@ class QuestionExtractor:
         return parsed_questions
 
     def _messages_from_text(self, content: str) -> List[Dict]:
-        """Parse plain text with dashed separator lines between messages."""
+        """
+        Parse plain text with dashed separator lines between messages.
+
+        Lines quoted with '>' (the Slack/markdown reply convention) are
+        thread replies: they attach to the message as 'replies' for answer
+        detection and are excluded from question extraction — a responder's
+        "Are they failing at the same time?" is not the asker's question.
+        Consecutive quoted lines form one reply; a blank line starts a new
+        one. '#'-heading lines are structural markup, not message content
+        (same rationale as stripping fenced code blocks).
+        """
         # Split by separator line (a run of 10+ dashes on its own line)
         blocks = re.split(r'\n-{10,}\n?|^-{10,}\n', content)
 
@@ -354,10 +364,27 @@ class QuestionExtractor:
             lines = block.split('\n')
             date = None
             text_lines = []
+            replies = []
+            in_reply = False
 
             for line in lines:
                 line = line.strip()
                 if not line:
+                    in_reply = False
+                    continue
+
+                if line.startswith('>'):
+                    quoted = line.lstrip('> ').strip()
+                    if quoted:
+                        if in_reply and replies:
+                            replies[-1] = (replies[-1] + ' ' + quoted)[:300]
+                        else:
+                            replies.append(quoted[:300])
+                    in_reply = True
+                    continue
+                in_reply = False
+
+                if re.match(r'#{1,6}\s', line):
                     continue
 
                 # Take the first date found; a line that is ONLY a date is
@@ -372,7 +399,10 @@ class QuestionExtractor:
 
             if text_lines:
                 # Newline-join: each source line stays its own sentence
-                messages.append({'text': '\n'.join(text_lines), 'date': date})
+                message = {'text': '\n'.join(text_lines), 'date': date}
+                if replies:
+                    message['replies'] = replies[:5]
+                messages.append(message)
 
         return messages
 
