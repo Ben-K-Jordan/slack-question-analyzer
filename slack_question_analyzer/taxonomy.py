@@ -29,7 +29,13 @@ logger = logging.getLogger(__name__)
 # below it, the question is an outlier (kept, but flagged for review)
 DEFAULT_OUTLIER_FLOOR = 0.4
 # Top-2 anchors closer than this -> ambiguous -> LLM adjudicates
-DEFAULT_AMBIGUITY_MARGIN = 0.03
+DEFAULT_AMBIGUITY_MARGIN = 0.05
+# Between the outlier floor and this, the best anchor is a WEAK match —
+# off-topic and too-vague questions land here ("is the wiki down?" still
+# scores ~0.5 against a connectivity anchor on shared outage vocabulary).
+# Embeddings alone must not force these into the closest wrong home: the
+# LLM adjudicates the closed choice, and its abstain (0) -> review pile
+DEFAULT_CONFIDENCE_FLOOR = 0.55
 
 
 class Taxonomy:
@@ -75,9 +81,13 @@ class Taxonomy:
 
 def route_questions(question_embeddings, anchor_embeddings,
                     outlier_floor: Optional[float] = None,
-                    ambiguity_margin: Optional[float] = None):
+                    ambiguity_margin: Optional[float] = None,
+                    confidence_floor: Optional[float] = None):
     """
-    Pure-code routing: nearest anchor per question, with a confidence gate.
+    Pure-code routing: nearest anchor per question, with TWO humility gates.
+    A question is only embedding-routed when its best anchor is both strong
+    (>= confidence floor) and clearly ahead of the runner-up (>= margin);
+    anything weaker goes to the LLM's closed choice, where abstain -> review.
 
     Returns (assignments, ambiguous, outliers):
     - assignments: question index -> bucket index (confident routes only)
@@ -90,6 +100,9 @@ def route_questions(question_embeddings, anchor_embeddings,
     if ambiguity_margin is None:
         ambiguity_margin = float(os.getenv('ROUTE_AMBIGUITY_MARGIN',
                                            str(DEFAULT_AMBIGUITY_MARGIN)))
+    if confidence_floor is None:
+        confidence_floor = float(os.getenv('ROUTE_CONFIDENCE_FLOOR',
+                                           str(DEFAULT_CONFIDENCE_FLOOR)))
 
     def unit(matrix):
         m = np.asarray(matrix, dtype=float)
@@ -110,10 +123,17 @@ def route_questions(question_embeddings, anchor_embeddings,
         if best_sim < outlier_floor:
             outliers.append(i)
             continue
+        candidates = [best]
         if sims.shape[1] > 1:
             second, second_sim = int(order[1]), float(sims[i][order[1]])
+            candidates.append(second)
             if best_sim - second_sim < ambiguity_margin:
-                ambiguous.append((i, [best, second]))
+                ambiguous.append((i, candidates))
                 continue
+        if best_sim < confidence_floor:
+            # Weak best match: off-topic or too vague to embed near any
+            # anchor — the LLM decides, with abstain available
+            ambiguous.append((i, candidates))
+            continue
         assignments[i] = best
     return assignments, ambiguous, outliers

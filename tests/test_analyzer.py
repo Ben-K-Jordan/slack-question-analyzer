@@ -358,3 +358,20 @@ def test_total_questions_derived_from_rendered_rows(monkeypatch):
                 + len(results['ungrouped_questions']))
     assert results['total_questions'] == rendered == 2
     assert results['total_groups'] == 0  # no phantom 'asked 2x'
+
+
+def test_rephrase_collapse_folds_suffixes(analyzer):
+    """Fixture-2 fake 2x: 'retry policy for failed transfers' vs 'a
+    transfer that fails ... try again' scored ZERO exact-token overlap and
+    survived as a phantom recurrence. Light suffix folding makes
+    fails/failed/transfer/transfers shared content."""
+    def q(text):
+        return {'text': text, 'normalized_text': text.lower(),
+                'original_message': 'm1'}
+
+    questions = [
+        q('How do I set up a retry policy for failed transfers?'),
+        q('Can a transfer that fails automatically retry a few times before giving up?'),
+    ]
+    kept = analyzer._collapse_same_message_rephrasings(questions)
+    assert len(kept) == 1

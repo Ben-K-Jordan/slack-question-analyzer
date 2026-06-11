@@ -203,3 +203,23 @@ def test_choose_bucket_zero_is_honest_abstain(monkeypatch, tmp_path):
     patch_chat(monkeypatch, '{"category": 0}')
     assert GroupLabeler('ollama').choose_bucket(
         'q?', [{'id': 1, 'name': 'A'}, {'id': 2, 'name': 'B'}]) == 0
+
+
+def test_route_weak_best_match_goes_to_llm_not_forced():
+    """Fixture-6 regression: off-topic and too-vague questions ('is the
+    wiki down?') still score ~0.5 against SOME anchor on shared vocabulary
+    and were force-routed. A weak best match (under the confidence floor
+    but over the outlier floor) is a closed LLM choice — where abstain
+    sends it to review — never a silent embedding route."""
+    anchors = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+    questions = [
+        [0.95, 0.1, 0.0],   # strong, clear -> routed by embeddings alone
+        [0.5, 0.1, 0.85],   # weak best (~0.50 cosine): off-topic-ish
+    ]
+    assignments, ambiguous, outliers = route_questions(
+        questions, anchors, outlier_floor=0.4, ambiguity_margin=0.03,
+        confidence_floor=0.55)
+    assert assignments == {0: 0}            # strong + clear: routed
+    assert [i for i, _ in ambiguous] == [1]  # weak best: LLM decides
+    assert ambiguous[0][1][0] == 0           # embedding favorite first
+    assert outliers == []                    # weak is NOT an outlier drop

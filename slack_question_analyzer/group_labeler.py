@@ -192,7 +192,7 @@ FEEDBACK_SYSTEM = (
 
 # Prompt pack version: stamped into results metadata so drift is traceable
 # (the LLM cache keys on full prompt text, so bumps also invalidate caches)
-PROMPT_PACK_VERSION = 11
+PROMPT_PACK_VERSION = 12
 
 LABEL_SYSTEM = (
     "If the group is empty, malformed, or too mixed to share one honest "
@@ -396,10 +396,20 @@ EXTRACT_SYSTEM = (
     "is an implicit help request — REAL even with no question mark. KEEP.\n"
     "- RHETORICAL: shaped like a question but seeks no answer ('Any "
     "thoughts?', 'Right?', 'Make sense?', 'Is there any way around this?', "
-    "'Anyone?'). DROP.\n"
+    "'Anyone?'). Social banter is RHETORICAL even with a question mark "
+    "('Anyone else excited for the holidays?') — it seeks solidarity, not "
+    "information. DROP.\n"
     "- CONTEXT: a statement describing their setup, environment, or what they "
     "already tried. Not a question — DROP it, but USE its facts to make the "
     "REAL questions standalone.\n"
+    "Most channel traffic is NOT a question: announcements, status updates, "
+    "thanks/closures ('fixed now'), FYI links, and decisions yield NOTHING. "
+    "Venting with no concrete symptom ('this deployment has been a "
+    "nightmare') is mood, not an ask — extract nothing; only a resolvable "
+    "symptom makes an implicit ask ('transfers silently stop after 50 "
+    "files'). A log paste with no request attached (posted 'for visibility' "
+    "or noted as self-resolved) yields NOTHING — log text alone is not a "
+    "question. Never rewrite a statement INTO a question.\n"
     "Rewrite every REAL question as a single standalone question.\n"
     "Standalone test: a reader who never saw the message can answer it "
     "without asking what 'it', 'this', 'they', or 'the platform' refers to — "
