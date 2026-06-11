@@ -650,11 +650,6 @@ class QuestionAnalyzer:
                 batch = suspicious[start:start + DETECT_BATCH_SIZE]
                 hits = self.labeler.extract_questions([t for t, _ in batch],
                                                       thorough=True)
-                # A message only counts as recovered if a SURVIVING question
-                # actually came from it — a hit dropped as unsupported (or
-                # reassigned elsewhere) must not block the regex fallback,
-                # or its message's question vanishes silently
-                recovered = set()
                 for hit in hits or []:
                     text, message = batch[hit['index']]
                     question = self._llm_question(hit['question'], text,
@@ -662,13 +657,15 @@ class QuestionAnalyzer:
                     question = self._verify_source(question, hit, batch)
                     if question is None:
                         continue
-                    for i, (t, _) in enumerate(batch):
-                        if t[:200] == question['original_message']:
-                            recovered.add(i)
-                            break
                     add_unless_duplicate(question)
+                # The regex fallback considers EVERY batch message, not just
+                # unrecovered ones: a message recovered with fewer questions
+                # than regex sees (one half of a two-part ask extracted, the
+                # Kafka half lost) deserves its missing parts back — the
+                # duplicate guard and the same-message collapse absorb the
+                # parts the LLM already produced.
                 for q in self.extractor.questions_from_messages(
-                        [m for i, (_, m) in enumerate(batch) if i not in recovered]):
+                        [m for _, m in batch]):
                     # When the quality model SAW the message and said 'no
                     # questions here' (hits succeeded), only an explicit '?'
                     # can overrule it. Question-shaped statements ('Will
@@ -974,7 +971,14 @@ class QuestionAnalyzer:
                     'text': hit['question'],
                     'normalized_text': self.extractor.normalize_question(hit['question']),
                     'date': message.get('date') or 'Unknown',
-                    'original_message': message['text'][:200],
+                    # Canonical source key (cleaned + collapsed, same as
+                    # every other path): the source string IS the message's
+                    # identity for rephrase-collapse, ejection, and the
+                    # render-integrity invariant — a normalization mismatch
+                    # makes one message look like two sources
+                    'original_message': ' '.join(self.extractor
+                                                 .clean_slack_markup(message['text'])
+                                                 .split())[:200],
                     'llm_detected': True,
                 }
                 if message.get('replies'):
@@ -998,7 +1002,9 @@ class QuestionAnalyzer:
         report('answers', 0, len(candidates))
         answered_total = 0
         for i, question in enumerate(candidates, 1):
-            verdict = self.labeler.is_answered(question['text'], question['replies'])
+            verdict = self.labeler.is_answered(
+                question['text'], question['replies'],
+                context=question.get('original_message') or '')
             if verdict is not None:
                 question['answered'] = verdict
                 if verdict:
