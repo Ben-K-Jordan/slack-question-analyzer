@@ -1,6 +1,14 @@
-# The Question Funnel — Pipeline Spec (v2.31, prompt pack 13, taxonomy v3)
+# The Question Funnel — Pipeline Spec (v2.32, prompt pack 14, taxonomy v3)
 
 > Deltas since the prompts/stages quoted below were written:
+> - Eval round 6: route adjudication shows abstain as a LISTED option
+>   ('0 NONE OF THESE...') — given only real categories a small model
+>   picks from the list every time, so off-topic questions were
+>   force-routed with the abstain rule sitting unused. Extraction
+>   few-shot gains DO-NOTs for log pastes and social banter (rules alone
+>   don't bind a 3B), and the venting-vs-symptom contrast is stated as
+>   one test with OFF-DOMAIN examples (two fixture-verbatim phrases that
+>   had crept into the prompt were removed).
 > - Eval round 5: the rescue-audit tie rule — a rescue is one verifier
 >   YES on a borderline add; if the audit then flags that member, the
 >   judges are 1-1 and the rescue is UNDONE (no verifier overrule round;
