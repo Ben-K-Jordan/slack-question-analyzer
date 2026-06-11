@@ -122,9 +122,58 @@ ANSWERED_SCHEMA = {
     'required': ['verdict'],
 }
 
+CONSOLIDATE_SCHEMA = {
+    'type': 'object',
+    'properties': {'keep': {'type': 'array', 'items': {'type': 'integer'}}},
+    'required': ['keep'],
+}
+
+# Lexical overlap catches near-verbatim restatement; this catches REPHRASED
+# restatement within one message ("wrong timezone after DST?" / "is the
+# DST-stopping issue timezone-related?" = one ask, two sentences)
+CONSOLIDATE_SYSTEM = (
+    "If the input is empty or malformed, or you are unsure, return every "
+    "question number. Do not guess.\n\n"
+    "All of these questions were extracted from ONE message. Questions that "
+    "restate the same ask from a different angle, or break one goal into "
+    "steps, are ONE ask. The test: would one answer resolve both?\n"
+    "Output the numbers to KEEP — exactly one per distinct ask, keeping the "
+    "most complete phrasing. If every question is a distinct ask, return "
+    "every number.\n\n"
+    "Example: 1. Could the scheduler be running in the wrong timezone after "
+    "DST? 2. Is the transfers-stopping-after-DST issue timezone-related? "
+    "One answer resolves both: {\"keep\": [1]}\n"
+    "Example: 1. Can we trigger transfers via REST? 2. Is there a way to "
+    "bulk-disable actions? Different asks: {\"keep\": [1, 2]}\n\n"
+    "Respond with JSON only: {\"keep\": [<numbers>]}"
+)
+
+FEEDBACK_SCHEMA = {
+    'type': 'object',
+    'properties': {'feature_request': {'type': 'boolean'}},
+    'required': ['feature_request'],
+}
+
+# The extractor's type tags are a noisy 3B signal; nothing leaves the
+# support funnel without this closed second opinion from the quality model
+FEEDBACK_SYSTEM = (
+    "If the question is empty or malformed, answer "
+    "{\"feature_request\": false}. Do not guess.\n\n"
+    "You decide whether a question is PRODUCT FEEDBACK or a SUPPORT "
+    "question.\n"
+    "feature_request is true ONLY if the asker wants a capability the "
+    "product does not currently have — a new feature or enhancement "
+    "('it would be great if...', 'can you add...', 'the product should...').\n"
+    "Asking HOW to do something, WHETHER something is possible today, or WHY "
+    "something is broken is SUPPORT — even if the answer turns out to be "
+    "'not supported'. When in doubt, answer false.\n"
+    "Respond with JSON only: {\"feature_request\": true} or "
+    "{\"feature_request\": false}"
+)
+
 # Prompt pack version: stamped into results metadata so drift is traceable
 # (the LLM cache keys on full prompt text, so bumps also invalidate caches)
-PROMPT_PACK_VERSION = 6
+PROMPT_PACK_VERSION = 7
 
 LABEL_SYSTEM = (
     "If the group is empty, malformed, or too mixed to share one honest "
@@ -772,6 +821,44 @@ class GroupLabeler:
                 if isinstance(i, int) and 1 <= i <= len(items):
                     assigned[i - 1] = name
         return assigned if any(assigned) else None
+
+    def consolidate_same_ask(self, message_text: str,
+                             question_texts: List[str]) -> Optional[List[int]]:
+        """
+        Which of several questions extracted from ONE message are distinct
+        asks? Returns 1-based indices to KEEP, or None on failure/abstain
+        (callers keep everything).
+        """
+        numbered = '\n'.join(f"{i + 1}. {q}" for i, q in enumerate(question_texts))
+        user = (f"Original message:\n{message_text[:400]}\n\n"
+                f"Questions extracted from it:\n{numbered}\n\n"
+                "Which numbers are distinct asks to keep?")
+        data = self._generate_json(self._system(CONSOLIDATE_SYSTEM), user,
+                                   CONSOLIDATE_SCHEMA, max_tokens=40)
+        if data is None or not isinstance(data.get('keep'), list):
+            return None
+        keep = sorted({int(i) for i in data['keep']
+                       if isinstance(i, int) and 1 <= i <= len(question_texts)})
+        if not keep:
+            return None  # "keep nothing" is not a meaningful verdict
+        if len(keep) < len(question_texts):
+            self._count('same_ask_collapsed', len(question_texts) - len(keep))
+        return keep
+
+    def confirm_feature_request(self, question: str) -> Optional[bool]:
+        """
+        Second opinion before a question leaves the support funnel: is this
+        genuinely a request for a capability that doesn't exist? Abstain or
+        failure -> None (callers keep it in support — the safer home).
+        """
+        data = self._generate_json(self._system(FEEDBACK_SYSTEM),
+                                   f"Question: {question}\nProduct feedback?",
+                                   FEEDBACK_SCHEMA, max_tokens=20)
+        if data is None or not isinstance(data.get('feature_request'), bool):
+            return None
+        self._count('feedback_confirmed' if data['feature_request']
+                    else 'feedback_rejected')
+        return data['feature_request']
 
     def summarize_analysis(self, groups: List[Dict], total_questions: int,
                            themes: Optional[List[Dict]] = None) -> Optional[str]:

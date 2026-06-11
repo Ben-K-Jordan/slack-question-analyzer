@@ -471,6 +471,7 @@ function transformAnalysisResults(results) {
       if (s.extract_dropped_unsupported) alerts.push(`${s.extract_dropped_unsupported} extraction(s) dropped (no source contains them)`);
       if (s.date_collisions_dropped) alerts.push(`${s.date_collisions_dropped} date-collision phantom(s) dropped`);
       if (s.extract_reassigned) alerts.push(`${s.extract_reassigned} extraction(s) reassigned to their true source`);
+      if (s.same_ask_collapsed) alerts.push(`${s.same_ask_collapsed} same-ask rewrite(s) consolidated`);
       return alerts.length ? alerts : null;
     })(),
     groups: results.groups.map((g, i) => ({
