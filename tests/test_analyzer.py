@@ -275,3 +275,27 @@ def test_dropped_questions_provenance_in_results(analyzer):
     results = analyzer.analyze_slack_content(content)
     assert 'dropped_questions' in results
     assert results['dropped_questions'] == []  # nothing dropped on clean input
+
+def test_total_questions_derived_from_rendered_rows(monkeypatch):
+    """The 'Questions logged' tile must equal the rows on the page. Two
+    surviving same-message rephrases that cluster get collapsed by the exit
+    invariant — and the total must reflect that, not the pre-grouping list."""
+    monkeypatch.setenv('SIMILARITY_THRESHOLD', '0.85')
+    monkeypatch.setenv('GROUP_LABELS', 'off')
+    analyzer = QuestionAnalyzer(provider='ollama', use_disk_cache=False)
+    vectors = {
+        'how can we normalize encoding during transfers?': [1.0, 0.0],
+        'what is the right way to deal with wrong-coded files?': [0.99, 0.14],
+    }
+    monkeypatch.setattr(analyzer.similarity_analyzer, 'get_embeddings_batch',
+                        lambda texts, progress_callback=None: np.array([vectors[t] for t in texts]))
+
+    # One message, two low-overlap rephrases (lexical collapse can't see
+    # them, no LLM consolidation with labels off) -> they cluster -> exit
+    # invariant collapses the occurrence -> total must be 1, not 2
+    results = analyzer.analyze_slack_content(
+        "2024-06-03\nHow can we normalize encoding during transfers? "
+        "What is the right way to deal with wrong-coded files?\n")
+    rendered = (sum(g['count'] for g in results['groups'])
+                + len(results['ungrouped_questions']))
+    assert results['total_questions'] == rendered == 1
