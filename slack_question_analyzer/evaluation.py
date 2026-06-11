@@ -296,8 +296,10 @@ def evaluate_transcript(analyzer, fixture: Dict) -> Dict:
                 if marker in (r.get('original_message') or '').lower()]
         check(f"message '{spec['contains']}' -> {spec['asks']} ask(s)",
               len(rows) == spec['asks'],
-              f"got {len(rows)}: " + ('; '.join(t[:60] for t in texts(rows))
-                                      or 'NONE — silently dropped?'))
+              f"got {len(rows)}: " + ('; '.join(
+                  f"{(r.get('text') or '')[:55]} "
+                  f"[src: {(r.get('original_message') or '')[:40]}]"
+                  for r in rows) or 'NONE — silently dropped?'))
 
     for pattern in expect.get('support_must_match', []):
         check(f'support contains /{pattern}/', any_match(pattern, support),
@@ -379,4 +381,13 @@ def format_transcript_report(result: Dict) -> str:
     lines.append(f"\n{result['passed']}/{len(result['checks'])} checks passed"
                  + ('' if not result['failed'] else
                     f" — {result['failed']} FAILED"))
+    # On failure, the provenance trail turns a mystery into data: every
+    # removed question with its reason and source
+    dropped = (result.get('results') or {}).get('dropped_questions') or []
+    if result['failed'] and dropped:
+        lines.append('\nProvenance (removed during analysis):')
+        for d in dropped:
+            lines.append(f"  - {(d.get('text') or '')[:60]} — "
+                         f"{d.get('reason', '')} "
+                         f"[src: {(d.get('source') or '')[:40]}]")
     return '\n'.join(lines)

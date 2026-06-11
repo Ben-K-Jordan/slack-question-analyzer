@@ -186,7 +186,12 @@ class QuestionAnalyzer:
             source = q.get('original_message') or ''
             wishful = bool(self._WISH_RE.search(source))
             labeled = bool(self._FEEDBACK_LABEL_RE.search(source))
-            if wishful and (labeled
+            # The purest build-it signal: a wish PLUS the asker's own
+            # statement that the capability doesn't exist — no model
+            # opinion needed (the 8B once kept 'would like cron support -
+            # doesn't look possible today' in the support funnel)
+            says_missing = bool(self._IMPOSSIBLE_RE.search(source))
+            if wishful and (labeled or says_missing
                             or (confirm is not None
                                 and confirm(q['text'], source) is True)):
                 q['qtype'] = 'feature-request'
@@ -354,6 +359,17 @@ class QuestionAnalyzer:
             kept.append(q)
         return kept
 
+    @staticmethod
+    def _ask_sentence(source: str) -> str:
+        """The sentence ending at the source's FIRST '?' — when a message
+        has exactly one question mark, that sentence is the asker's actual
+        question, and survivor-ranking should prefer its rewrite."""
+        qmark = source.find('?')
+        if qmark == -1 or source.count('?') > 1:
+            return source
+        start = max(source.rfind('.', 0, qmark), source.rfind('!', 0, qmark))
+        return source[start + 1:qmark + 1].strip() or source
+
     # A question that LEADS with a restatement marker is by its own words a
     # rewording of the message's other ask — the marker is deterministic
     # evidence the lexical-overlap test can't see ('I mean is there a
@@ -412,7 +428,9 @@ class QuestionAnalyzer:
             # Which phrasing survives a collapse: the one the source message
             # actually vouches for. An extraction that borrowed vocabulary
             # (prompt examples, neighbor messages) loses to the rewrite drawn
-            # from the message itself.
+            # from the message itself. (Ask-sentence-first ranking was tried
+            # and reverted: substring matches let contaminated rewrites
+            # outscore genuine ones that import the context's subject.)
             support = self._source_support(q['normalized_text'],
                                            q.get('original_message') or '')
             return (support, len(toks), len(q.get('text') or ''))
@@ -499,6 +517,10 @@ class QuestionAnalyzer:
         r"|wants? to be able to|doesn'?t exist today|isn'?t possible today"
         r"|(doesn'?t|does not) (look|seem|appear)( to be)? possible",
         re.IGNORECASE)
+    _IMPOSSIBLE_RE = re.compile(
+        r"(doesn'?t|does not) (exist|(look|seem|appear)( to be)? possible)"
+        r"( today)?|isn'?t possible today|not (currently )?supported today",
+        re.IGNORECASE)
     _FEEDBACK_LABEL_RE = re.compile(
         r'\b(feature requests?|product feedback|enhancement requests?'
         r'|customer feedback)\b', re.IGNORECASE)
@@ -574,12 +596,7 @@ class QuestionAnalyzer:
             # context (both can be verbatim-supported by the whole message,
             # and 'why are transfers timing out' once outranked 'how do I
             # increase the timeout' purely on length)
-            ask_sentence = source
-            qmark = source.find('?')
-            if qmark != -1:
-                start = max(source.rfind('.', 0, qmark),
-                            source.rfind('!', 0, qmark))
-                ask_sentence = source[start + 1:qmark + 1].strip() or source
+            ask_sentence = self._ask_sentence(source)
 
             def rank(q):
                 return (self._source_support(q['normalized_text'], ask_sentence),
@@ -944,6 +961,53 @@ class QuestionAnalyzer:
             self.labeler._count('integrity_repairs', repaired)
         return result
 
+    def _routing_tiebreak(self, groups: List[Dict],
+                          anchor_embeddings) -> List[Dict]:
+        """
+        Third-judge rule for contested merges. When the audit nominated a
+        member for eviction and the verifier overruled it, the judges are
+        1-1 — and under GLOBAL grouping that stalemate is what builds
+        cross-category false merges. Routing breaks the tie: if the
+        contested member and the rest of its group CONFIDENTLY route to
+        different buckets (both unambiguous, neither abstaining), the
+        member is split out to its own row. Routing is too noisy to wall
+        grouping — but a clean two-sided disagreement is real evidence.
+        """
+        sa = self.similarity_analyzer
+        out: List[Dict] = []
+        split_out: List[Dict] = []
+        for group in groups:
+            flagged = [q for q in group['questions']
+                       if q.pop('_audit_flagged', False)]
+            if not flagged or len(group['questions']) < 2:
+                out.append(group)
+                continue
+            for q in flagged:
+                rest = [m for m in group['questions'] if m is not q]
+                if not rest:
+                    break
+                rep = next((m for m in rest
+                            if m['text'] == group['representative_question']),
+                           rest[0])
+                embeds = sa.get_embeddings_batch(
+                    [q['normalized_text'], rep['normalized_text']])
+                assignments, _, _ = route_questions(embeds, anchor_embeddings)
+                if (0 in assignments and 1 in assignments
+                        and assignments[0] != assignments[1]):
+                    logger.info("Routing broke the judges' tie (audit said "
+                                "different, verifier said same, categories "
+                                "disagree): %.80r split from %.60r",
+                                q['text'], group['representative_question'])
+                    group['questions'] = rest
+                    group['count'] = len(rest)
+                    if group['representative_question'] == q['text']:
+                        group['representative_question'] = rest[0]['text']
+                    split_out.append({'representative_question': q['text'],
+                                      'questions': [q], 'count': 1,
+                                      'avg_similarity': 1.0})
+            out.append(group)
+        return out + split_out
+
     def _group_with_taxonomy(self, questions: List[Dict], taxonomy: Taxonomy,
                              verifier, auditor, known_topics,
                              report) -> List[Dict]:
@@ -987,6 +1051,9 @@ class QuestionAnalyzer:
 
         # Route each cluster by its representative question
         anchor_embeddings = sa.get_embeddings_batch(taxonomy.anchor_texts())
+        # Contested merges first: routing is the third judge on any member
+        # the audit flagged and the verifier kept
+        groups = self._routing_tiebreak(groups, anchor_embeddings)
         rep_embeddings = sa.get_embeddings_batch(
             [self.extractor.normalize_question(g['representative_question'])
              for g in groups])
