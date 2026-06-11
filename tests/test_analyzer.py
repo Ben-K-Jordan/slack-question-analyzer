@@ -550,3 +550,48 @@ def test_single_ask_cap_keeps_the_question_sentence_rewrite(analyzer):
     kept = analyzer._enforce_single_ask_cap(questions)
     assert len(kept) == 1
     assert 'increase the SFTP connection timeout' in kept[0]['text']
+
+
+def test_enumerated_siblings_locked_separate_from_all_collapse_passes(analyzer, monkeypatch):
+    """PRECEDENCE RULE (fixture 7): a message that explicitly enumerates
+    separate asks had its split decided at extraction, on the asker's own
+    words — no collapse pass may merge the siblings. Consolidation once
+    deleted 'max retry count' as a 'rephrasing' of its enumerated sibling."""
+    source = ('Two things for wM MFT (SaaS): 1. can we set a max retry count '
+              'per transfer? 2. can we tag transfers with a custom label?')
+
+    def q(text):
+        return {'text': text, 'normalized_text': text.lower(),
+                'original_message': source}
+
+    siblings = [q('Can we set a max retry count per transfer?'),
+                q('Can we tag transfers with a custom label for reporting?')]
+    # Lexical collapse: locked
+    assert len(analyzer._collapse_same_message_rephrasings(list(siblings))) == 2
+    # Single-ask cap: exempt (enumerated, multiple '?')
+    assert len(analyzer._enforce_single_ask_cap(list(siblings))) == 2
+    # LLM consolidation: never even consulted for enumerated messages
+    analyzer_llm_called = []
+    if analyzer.labeler is None:
+        from slack_question_analyzer.group_labeler import GroupLabeler
+        analyzer.labeler = GroupLabeler('ollama')
+    monkeypatch.setattr(analyzer.labeler, 'available', lambda: True)
+    monkeypatch.setattr(analyzer.labeler, 'consolidate_same_ask',
+                        lambda msg, texts: analyzer_llm_called.append(msg) or [1])
+    monkeypatch.setattr(analyzer.labeler, 'verify_same_topic', lambda a, b: True)
+    kept = analyzer._consolidate_same_ask(list(siblings))
+    assert len(kept) == 2
+    assert analyzer_llm_called == []
+
+
+def test_topic_label_must_be_grounded_in_member_text(analyzer):
+    """A group of failure-alert questions was once labeled 'Transfer
+    Retries' — words its members never said. Labels describe, never invent."""
+    group = {'questions': [
+        {'text': 'How do we set up alerting when a transfer fails?'},
+        {'text': 'What is the way to get an alert on transfer failures?'},
+    ]}
+    assert analyzer._topic_grounded('Transfer Failure Alerting', group)
+    assert analyzer._topic_grounded('Failure Alerts', group)
+    assert not analyzer._topic_grounded('Transfer Retries', group)
+    assert not analyzer._topic_grounded('', group)
