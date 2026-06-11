@@ -81,6 +81,23 @@ def evaluate(analyzer, fixture: Dict) -> Dict:
             routing_mismatches.append({'text': q['text'],
                                        'expected': q['bucket'], 'got': got})
 
+    # Render-integrity assertions: independent of labels, ANY fixture run
+    # fails on a group that can't prove its count
+    integrity_violations: List[str] = []
+    for group in groups:
+        rows = [q for q in group['questions'] if (q.get('text') or '').strip()]
+        if len(rows) != group['count']:
+            integrity_violations.append(
+                f"count {group['count']} != {len(rows)} non-empty rows: "
+                f"{group['representative_question'][:60]}")
+        if group['count'] >= 2:
+            sources = {q.get('original_message') for q in rows}
+            texts = {q.get('normalized_text') for q in rows}
+            if len(sources) < 2 and len(texts) > 1:
+                integrity_violations.append(
+                    f"{group['count']}x group without distinct sources: "
+                    f"{group['representative_question'][:60]}")
+
     expected_pairs = _same_group_pairs(
         {q['text']: q.get('group') for q in fixture['questions']})
     got_pairs = _same_group_pairs(predicted_group)
@@ -100,6 +117,7 @@ def evaluate(analyzer, fixture: Dict) -> Dict:
                                                    key=sorted)],
         'wrong_pairs': [sorted(p) for p in sorted(got_pairs - expected_pairs,
                                                   key=sorted)],
+        'integrity_violations': integrity_violations,
         'taxonomy_version': taxonomy.version,
         'fixture': str(Path(getattr(fixture, 'path', '') or '')),
     }
@@ -126,6 +144,11 @@ def format_report(result: Dict) -> str:
         lines.append('\nWrong pairs (grouped, should not):')
         for a, b in result['wrong_pairs']:
             lines.append(f"  - {a[:70]}\n    + {b[:70]}")
-    if not (result['routing_mismatches'] or result['missed_pairs'] or result['wrong_pairs']):
+    if result.get('integrity_violations'):
+        lines.append('\nINTEGRITY VIOLATIONS (a count that cannot prove its rows):')
+        for v in result['integrity_violations']:
+            lines.append(f"  ! {v}")
+    if not (result['routing_mismatches'] or result['missed_pairs']
+            or result['wrong_pairs'] or result.get('integrity_violations')):
         lines.append('\nPerfect score.')
     return '\n'.join(lines)

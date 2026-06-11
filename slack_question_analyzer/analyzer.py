@@ -77,6 +77,7 @@ class QuestionAnalyzer:
         self._summary_mode = os.getenv('EXECUTIVE_SUMMARY', 'auto').lower()
         self._themes_mode = os.getenv('THEMES', 'auto').lower()
         self._last_routing = None  # taxonomy routing health stats, per run
+        self._dropped: List[Dict] = []  # provenance trail, reset per run
 
     def _llm_enabled(self, mode: str) -> bool:
         """Whether an optional LLM feature should run."""
@@ -114,6 +115,7 @@ class QuestionAnalyzer:
                 progress_callback(stage, completed, total)
 
         report('extracting')
+        self._dropped = []  # provenance: every removed question, with reason
         if self.labeler is not None:
             self.labeler.stats = {}  # fresh abstain/verdict counters per run
         logger.info("Step 1: Extracting questions from %d file(s)...", len(contents))
@@ -221,6 +223,9 @@ class QuestionAnalyzer:
         # cluster into a phantom 'asked 2x'; collapse them deterministically
         # — whatever upstream pass leaked them.
         self._collapse_same_source_occurrences(groups)
+        # Exit assertion: a group may only render a count it can PROVE with
+        # rows. Violations are repaired (never shipped) and counted loudly.
+        groups = self._enforce_render_integrity(groups)
         logger.info("Created %d question groups", len(groups))
         report('grouping', 1, 1)
 
@@ -251,6 +256,9 @@ class QuestionAnalyzer:
             'groups': multi_question_groups,
             'ungrouped_questions': [q['questions'][0] for q in single_questions],
             'feature_requests': feature_requests,
+            # Provenance: every question any stage removed, with its reason —
+            # nothing is ever silently consumed
+            'dropped_questions': list(self._dropped),
             # Answered=0 with no replies in the export means "unmeasurable",
             # not "everything went unanswered" — the UI shows the difference
             'threads_present': any(q.get('replies') for q in questions),
@@ -275,8 +283,15 @@ class QuestionAnalyzer:
         report('complete', 1, 1)
         return result
 
-    @staticmethod
-    def _collapse_same_message_rephrasings(questions: List[Dict]) -> List[Dict]:
+    def _record_drop(self, question: Dict, reason: str):
+        """Provenance: a removed question becomes an auditable record in the
+        results, never a silent mutation."""
+        self._dropped.append({'text': question.get('text'),
+                              'date': question.get('date'),
+                              'source': question.get('original_message'),
+                              'reason': reason})
+
+    def _collapse_same_message_rephrasings(self, questions: List[Dict]) -> List[Dict]:
         """
         Two extractions of the same ask from ONE message are one question,
         not an 'asked 2x' topic. The extractor sometimes rewrites a single
@@ -309,6 +324,7 @@ class QuestionAnalyzer:
                     break
             if duplicate:
                 logger.info("Collapsed a same-message rephrasing: %.80r", q['text'])
+                self._record_drop(q, 'same-message rephrasing (lexical)')
                 continue
             by_message.setdefault(source, []).append(
                 {'norm': q['normalized_text'], 'tokens': toks})
@@ -365,6 +381,7 @@ class QuestionAnalyzer:
                                       hit.get('type'))
         logger.info("Dropped an unsupported extraction (no message in the "
                     "batch contains it): %.80r", question['text'])
+        self._record_drop(question, 'unsupported extraction (no source contains it)')
         if self.labeler is not None:
             self.labeler._count('extract_dropped_unsupported')
         return None
@@ -419,6 +436,7 @@ class QuestionAnalyzer:
                 logger.info("Consolidated a same-ask rewrite: %.80r",
                             questions[i]['text'])
                 self.labeler._count('same_ask_collapsed')
+                self._record_drop(questions[i], 'same-ask consolidation (two judges)')
                 drop.add(i)
         if drop:
             return [q for i, q in enumerate(questions) if i not in drop]
@@ -449,6 +467,7 @@ class QuestionAnalyzer:
                     logger.info("Dropped a date-collision phantom (%s copy of "
                                 "a question its source doesn't contain): %.80r",
                                 q.get('date'), q['text'])
+                    self._record_drop(q, 'date-collision phantom')
                     if self.labeler is not None:
                         self.labeler._count('date_collisions_dropped')
                     dropped.add(id(q))
@@ -579,8 +598,7 @@ class QuestionAnalyzer:
                 self.labeler._count('messages_without_questions', len(silent))
         return questions
 
-    @staticmethod
-    def _collapse_same_source_occurrences(groups: List[Dict]) -> None:
+    def _collapse_same_source_occurrences(self, groups: List[Dict]) -> None:
         """
         Enforce, after ALL grouping passes: within one group, one occurrence
         per source message. Two rephrases of one message's ask are one
@@ -603,6 +621,7 @@ class QuestionAnalyzer:
                     logger.info("Collapsed a same-source occurrence inside a "
                                 "group (one message = one asking): %.80r",
                                 q['text'])
+                    self._record_drop(q, 'same-source occurrence in a group')
                     continue
                 if source:
                     first_norm.setdefault(source, norm)
@@ -610,6 +629,48 @@ class QuestionAnalyzer:
             if len(kept) < len(group['questions']):
                 group['questions'] = kept
                 group['count'] = len(kept)
+
+    def _enforce_render_integrity(self, groups: List[Dict]) -> List[Dict]:
+        """
+        'Occurrence' is defined ONCE, here, at the exit: a non-empty kept
+        question row. A group's count must equal its rows, and a 2+ count
+        must be provable — either 2+ distinct source messages, or identical
+        text throughout (distinct short messages can share the same text).
+        Any group that can't prove its count is repaired on the spot
+        (empty rows stripped, unprovable recurrences demoted to singletons)
+        and the repair is counted — a '2x' that can't name its two sources
+        can never render again, regardless of which upstream stage misbehaved.
+        """
+        repaired = 0
+        result: List[Dict] = []
+        for group in groups:
+            rows = [q for q in group['questions'] if (q.get('text') or '').strip()]
+            if len(rows) != len(group['questions']):
+                repaired += 1
+                logger.warning("Integrity repair: stripped %d empty row(s) "
+                               "from a group", len(group['questions']) - len(rows))
+            if not rows:
+                repaired += 1
+                continue  # a group with no rows does not exist
+            group['questions'] = rows
+            group['count'] = len(rows)
+            if group['count'] >= 2:
+                sources = {q.get('original_message') for q in rows}
+                texts = {q.get('normalized_text') for q in rows}
+                if len(sources) < 2 and len(texts) > 1:
+                    repaired += 1
+                    logger.warning("Integrity repair: demoted a %dx group "
+                                   "that cannot prove distinct sources: %.70r",
+                                   group['count'], rows[0]['text'])
+                    for q in rows:
+                        result.append({**group, 'questions': [q], 'count': 1,
+                                       'representative_question': q['text'],
+                                       'avg_similarity': 1.0})
+                    continue
+            result.append(group)
+        if repaired and self.labeler is not None:
+            self.labeler._count('integrity_repairs', repaired)
+        return result
 
     def _group_with_taxonomy(self, questions: List[Dict], taxonomy: Taxonomy,
                              verifier, auditor, known_topics,

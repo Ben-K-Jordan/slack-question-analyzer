@@ -234,3 +234,44 @@ def test_same_source_rephrases_never_count_as_recurrence(analyzer):
     assert phantom['count'] == 1        # rephrase phantom collapsed
     assert genuine['count'] == 2        # identical-text repeats untouched
     assert cross_message['count'] == 2  # genuine recurrence untouched
+
+def test_render_integrity_repairs_unprovable_groups(analyzer):
+    """Exit invariant: a group may only render a count it can prove with
+    rows. Empty rows are stripped, and a 2x that can't show two distinct
+    sources (or identical text throughout) is demoted to singletons."""
+    empty_row = {'count': 2, 'representative_question': 'r', 'avg_similarity': 0.9,
+                 'questions': [
+                     {'text': 'Real question?', 'normalized_text': 'real question?',
+                      'original_message': 'm1'},
+                     {'text': '', 'normalized_text': '', 'original_message': 'm2'}]}
+    phantom = {'count': 2, 'representative_question': 'p', 'avg_similarity': 0.9,
+               'questions': [
+                   {'text': 'Rewrite one?', 'normalized_text': 'rewrite one?',
+                    'original_message': 'm4'},
+                   {'text': 'Rewrite two?', 'normalized_text': 'rewrite two?',
+                    'original_message': 'm4'}]}
+    genuine = {'count': 2, 'representative_question': 'g', 'avg_similarity': 0.9,
+               'questions': [
+                   {'text': 'Same q?', 'normalized_text': 'same q?',
+                    'original_message': 'a'},
+                   {'text': 'Same q reworded?', 'normalized_text': 'same q reworded?',
+                    'original_message': 'b'}]}
+    out = analyzer._enforce_render_integrity([empty_row, phantom, genuine])
+
+    counts = sorted(g['count'] for g in out)
+    assert counts == [1, 1, 1, 2]            # phantom demoted to 2 singletons
+    assert all(q['text'] for g in out for q in g['questions'])  # no empty rows
+    two = next(g for g in out if g['count'] == 2)
+    assert two['representative_question'] == 'g'  # only the provable 2x survives
+
+
+def test_dropped_questions_provenance_in_results(analyzer):
+    """Nothing is silently consumed: removed questions become records."""
+    content = (
+        "2024-01-05\nHow do I reset my password?\n"
+        "-----------------------------------------------------------\n"
+        "2024-01-09\nWhat is the deploy schedule for production releases?\n"
+    )
+    results = analyzer.analyze_slack_content(content)
+    assert 'dropped_questions' in results
+    assert results['dropped_questions'] == []  # nothing dropped on clean input

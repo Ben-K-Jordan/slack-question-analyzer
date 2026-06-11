@@ -120,3 +120,12 @@ def test_abbreviations_do_not_split_sentences():
     questions = extractor.extract_questions(
         'Can we whitelist protocols, i.e. SFTP and FTPS only?')
     assert len(questions) == 1 and 'i.e. SFTP' in questions[0]
+
+
+def test_decimal_numbers_do_not_split_sentences():
+    from slack_question_analyzer.question_extractor import QuestionExtractor
+    extractor = QuestionExtractor()
+    questions = extractor.extract_questions(
+        'How can my customer check transaction statistics in WM MFT 10.15 for commercial purposes?')
+    assert len(questions) == 1
+    assert '10.15' in questions[0]
