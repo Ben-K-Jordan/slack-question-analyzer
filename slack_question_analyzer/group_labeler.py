@@ -156,6 +156,10 @@ CONSOLIDATE_SYSTEM = (
     "2. How can we handle a bad row gracefully and divert it for review? "
     "Same outcome wanted (don't fail outright), one answer resolves both: "
     "{\"keep\": [2]}\n"
+    "Example: 1. How do I increase the API request timeout? 2. Why do "
+    "large uploads time out before finishing? The second restates the "
+    "first's SYMPTOM from the message's context — one answer (raise the "
+    "timeout) resolves both: {\"keep\": [1]}\n"
     "Example: 1. Can we trigger transfers via REST? 2. Is there a way to "
     "bulk-disable actions? Different asks: {\"keep\": [1, 2]}\n\n"
     "Respond with JSON only: {\"keep\": [<numbers>]}"
@@ -192,7 +196,7 @@ FEEDBACK_SYSTEM = (
 
 # Prompt pack version: stamped into results metadata so drift is traceable
 # (the LLM cache keys on full prompt text, so bumps also invalidate caches)
-PROMPT_PACK_VERSION = 15
+PROMPT_PACK_VERSION = 16
 
 LABEL_SYSTEM = (
     "If the group is empty, malformed, or too mixed to share one honest "
@@ -328,6 +332,9 @@ ROUTE_SYSTEM = (
     "If the question fits two categories almost equally, fits none of them "
     "well, or is too vague to have a subject at all ('is there a limit?'), "
     "reply 0.\n"
+    "Example: given file-transfer product categories, 'Is the Jenkins "
+    "server down?' is about a DIFFERENT tool — {\"category\": 0}, even "
+    "though a connectivity-sounding category exists.\n"
     "Never invent a number. Never explain.\n"
     "Respond with JSON only: {\"category\": <number>}"
 )
