@@ -252,6 +252,8 @@ def stub_llm(monkeypatch, analyzer, **methods):
     # Default: LLM-first extraction "fails" so the regex fallback runs,
     # keeping older tests' question sets unchanged
     methods.setdefault('extract_questions', lambda texts, thorough=False: None)
+    methods.setdefault('consolidate_same_ask', lambda msg, texts: None)
+    methods.setdefault('confirm_feature_request', lambda text: True)
     for name, fn in methods.items():
         monkeypatch.setattr(analyzer.labeler, name, fn)
 
@@ -806,3 +808,96 @@ def test_dropped_unsupported_recovery_still_falls_back_to_regex(monkeypatch):
     texts = [q['text'] for q in results['ungrouped_questions']]
     assert all('sourdough' not in t for t in texts)
     assert any('IWHI' in t for t in texts)  # regex fallback recovered it
+
+
+# ---- Same-ask consolidation & feedback confirmation (fresh-transcript round) ----
+
+def test_rephrased_same_ask_consolidated(monkeypatch):
+    """Fresh-transcript regression (DST scheduler): one ask phrased across
+    two sentences became two questions. Lexical overlap can't see it (2
+    shared words); the quality model picks the distinct asks."""
+    monkeypatch.setenv('LLM_EXTRACTION', 'full')
+    vectors = {'could the scheduler be running in the wrong timezone after dst?': [1.0, 0.0]}
+    analyzer = make_analyzer(monkeypatch, vectors=vectors, label_groups=True)
+
+    def extract(texts, thorough=False):
+        return [
+            {'index': 0, 'question': 'Could the scheduler be running in the wrong timezone after DST?'},
+            {'index': 0, 'question': 'Is the transfers-stopping-after-DST issue timezone-related?'},
+        ]
+
+    stub_llm(monkeypatch, analyzer,
+             label_group=lambda texts, keywords=None: None,
+             verify_same_topic=lambda a, b: None,
+             extract_questions=extract,
+             consolidate_same_ask=lambda msg, texts: [1],  # one distinct ask
+             summarize_analysis=lambda groups, total, themes=None: None)
+
+    results = analyzer.analyze_slack_content(
+        "2024-06-04\nScheduled transfers stop right after DST. Could the "
+        "scheduler be running in the wrong timezone after DST changes?\n")
+    assert results['total_questions'] == 1
+    assert 'wrong timezone' in results['ungrouped_questions'][0]['text']
+
+
+def test_consolidation_abstain_keeps_everything(monkeypatch):
+    monkeypatch.setenv('LLM_EXTRACTION', 'full')
+    vectors = {
+        'can we trigger transfers via rest?': [1.0, 0.0],
+        'is there a way to bulk-disable actions?': [0.0, 1.0],
+    }
+    analyzer = make_analyzer(monkeypatch, vectors=vectors, label_groups=True)
+    stub_llm(monkeypatch, analyzer,
+             label_group=lambda texts, keywords=None: None,
+             verify_same_topic=lambda a, b: None,
+             extract_questions=lambda texts, thorough=False: [
+                 {'index': 0, 'question': 'Can we trigger transfers via REST?'},
+                 {'index': 0, 'question': 'Is there a way to bulk-disable actions?'}],
+             consolidate_same_ask=lambda msg, texts: None,  # abstain
+             summarize_analysis=lambda groups, total, themes=None: None)
+
+    results = analyzer.analyze_slack_content(
+        "2024-06-04\nCan we trigger transfers via REST instead of the "
+        "scheduler? Also is there a way to bulk-disable actions?\n")
+    assert results['total_questions'] == 2
+
+
+def test_unconfirmed_feature_request_stays_in_support(monkeypatch):
+    """Fresh-transcript regression: the feedback lane became a dumping
+    ground for misroutes. The 3B tag alone no longer diverts — the quality
+    model must confirm, else the question stays in support."""
+    monkeypatch.setenv('LLM_EXTRACTION', 'full')
+    vectors = {'is there a cleaner pattern for routing files by prefix?': [1.0, 0.0]}
+    analyzer = make_analyzer(monkeypatch, vectors=vectors, label_groups=True)
+    stub_llm(monkeypatch, analyzer,
+             label_group=lambda texts, keywords=None: None,
+             verify_same_topic=lambda a, b: None,
+             extract_questions=lambda texts, thorough=False: [
+                 {'index': 0, 'question': 'Is there a cleaner pattern for routing files by prefix?',
+                  'type': 'feature-request'}],  # mis-tagged by the 3B
+             confirm_feature_request=lambda text: False,  # 8B: it's support
+             summarize_analysis=lambda groups, total, themes=None: None)
+
+    results = analyzer.analyze_slack_content(
+        "2024-06-03\nIs there a cleaner pattern for routing files by prefix?\n")
+    assert results['feature_requests'] == []
+    assert results['total_questions'] == 1
+
+
+def test_consolidate_same_ask_parses_and_counts(monkeypatch):
+    labeler = GroupLabeler('ollama')
+    patch_chat(monkeypatch, ['{"keep": [1]}'])
+    keep = labeler.consolidate_same_ask('msg', ['a?', 'b rephrased?'])
+    assert keep == [1]
+    assert labeler.stats.get('same_ask_collapsed') == 1
+
+    patch_chat(monkeypatch, ['{"keep": []}'])
+    assert labeler.consolidate_same_ask('msg2', ['c?', 'd?']) is None  # not meaningful
+
+
+def test_confirm_feature_request_verdicts(monkeypatch):
+    labeler = GroupLabeler('ollama')
+    patch_chat(monkeypatch, ['{"feature_request": true}'])
+    assert labeler.confirm_feature_request('Can you add dark mode?') is True
+    patch_chat(monkeypatch, ['{"feature_request": false}'])
+    assert labeler.confirm_feature_request('How do I enable dark mode?') is False
