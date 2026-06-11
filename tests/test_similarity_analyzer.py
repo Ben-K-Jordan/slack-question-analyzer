@@ -706,3 +706,79 @@ def test_singleton_rescue_skips_far_singletons(monkeypatch):
     questions = [question('a?'), question('b?'), question('c?')]
     groups = analyzer.group_similar_questions(questions, verifier=never_single)
     assert sorted(g['count'] for g in groups) == [1, 2]
+
+
+def typed_question(text, qtype=None):
+    q = question(text)
+    if qtype:
+        q['qtype'] = qtype
+    return q
+
+
+def test_cross_type_borderline_merge_vetoed(monkeypatch):
+    """The GENERAL rule behind every observed false merge: a capability
+    question never LLM-merges with a breakage report, however similar the
+    vocabulary. The verifier is not even consulted."""
+    analyzer = make_analyzer(monkeypatch, threshold='0.85')
+    monkeypatch.setenv('LLM_VERIFY_MARGIN', '0.05')
+    fake = np.array([[1.0, 0.0], [0.83, float(np.sqrt(1 - 0.83 ** 2))]])
+    monkeypatch.setattr(analyzer, 'get_embeddings_batch',
+                        lambda texts, progress_callback=None: fake)
+
+    def never(a, b):
+        raise AssertionError('cross-type pair must not reach the verifier')
+
+    questions = [typed_question('How do I merge the content of two files?', 'how-to'),
+                 typed_question('Why does the file merge keep failing?', 'troubleshooting')]
+    groups = analyzer.group_similar_questions(questions, verifier=never)
+    assert len(groups) == 2
+
+
+def test_same_family_borderline_merge_still_asks_verifier(monkeypatch):
+    """how-to and is-it-possible are the same family (capability): the
+    verifier still decides those."""
+    analyzer = make_analyzer(monkeypatch, threshold='0.85')
+    monkeypatch.setenv('LLM_VERIFY_MARGIN', '0.05')
+    fake = np.array([[1.0, 0.0], [0.83, float(np.sqrt(1 - 0.83 ** 2))]])
+    monkeypatch.setattr(analyzer, 'get_embeddings_batch',
+                        lambda texts, progress_callback=None: fake)
+
+    questions = [typed_question('How do I trigger a transfer via REST?', 'how-to'),
+                 typed_question('Is it possible to trigger transfers via REST?', 'is-it-possible')]
+    groups = analyzer.group_similar_questions(questions, verifier=lambda a, b: True)
+    assert len(groups) == 1
+
+
+def test_untyped_questions_never_vetoed(monkeypatch):
+    """No type info = no veto (regex-extracted questions carry no qtype)."""
+    analyzer = make_analyzer(monkeypatch, threshold='0.85')
+    monkeypatch.setenv('LLM_VERIFY_MARGIN', '0.05')
+    fake = np.array([[1.0, 0.0], [0.83, float(np.sqrt(1 - 0.83 ** 2))]])
+    monkeypatch.setattr(analyzer, 'get_embeddings_batch',
+                        lambda texts, progress_callback=None: fake)
+    questions = [question('How do I reset my password?'),
+                 question('Steps for changing my password?')]
+    groups = analyzer.group_similar_questions(questions, verifier=lambda a, b: True)
+    assert len(groups) == 1
+
+
+def test_cross_type_singleton_rescue_vetoed(monkeypatch):
+    analyzer = make_analyzer(monkeypatch, threshold='0.8')
+    fake = np.array([
+        [1.0, 0.0, 0.0],
+        [0.85, float(np.sqrt(1 - 0.85 ** 2)), 0.0],
+        [0.75, 0.0, float(np.sqrt(1 - 0.75 ** 2))],
+    ])
+    monkeypatch.setattr(analyzer, 'get_embeddings_batch',
+                        lambda texts, progress_callback=None: fake)
+
+    def verifier(a, b):
+        if len(a) == 1:
+            raise AssertionError('cross-type rescue must not reach the verifier')
+        return None
+
+    questions = [typed_question('How can we avoid running out of threads?', 'how-to'),
+                 typed_question('Is there a way to scale thread use vertically?', 'is-it-possible'),
+                 typed_question('Why did the thread pool crash with an error?', 'troubleshooting')]
+    groups = analyzer.group_similar_questions(questions, verifier=verifier)
+    assert sorted(g['count'] for g in groups) == [1, 2]
