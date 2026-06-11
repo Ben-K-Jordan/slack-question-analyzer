@@ -636,3 +636,15 @@ def test_routing_tiebreak_splits_contested_cross_category_member(analyzer, monke
               'count': 2, 'avg_similarity': 0.82}
     out2 = analyzer._routing_tiebreak([group2], anchors)
     assert [g['count'] for g in out2] == [2]
+
+
+def test_enumeration_requires_enumeration_position(analyzer):
+    """'(synthetic test set 2) ' matched the bare \\d[.)] pattern and faked
+    an asker-declared split for a whole message. Digit enumeration must
+    appear at message start or after a colon/semicolon."""
+    R = analyzer._ENUMERATED_ASKS_RE
+    assert not R.search('Header (test set 2) How do I set up a retry policy?')
+    assert not R.search('Upgraded to 10.15. Transfers fail now.')
+    assert R.search('Two things: 1. retry count? 2. custom labels?')
+    assert R.search('1. Can we restrict IP ranges? 2. Maintenance windows?')
+    assert R.search('does it support TLS, and separately, Kafka events?')

@@ -1,6 +1,17 @@
-# The Question Funnel — Pipeline Spec (v2.39, prompt pack 19, taxonomy v3)
+# The Question Funnel — Pipeline Spec (v2.40, prompt pack 20, taxonomy v3)
 
 > Deltas since the prompts/stages quoted below were written:
+> - Eval round 14 (provenance diagnostics paid off immediately): a
+>   transcript TITLE line glued to the first message inflated its source
+>   past the 200-char identity cap AND '(test set 2)' matched the bare
+>   digit-enumeration pattern - faking an asker-declared split, exempting
+>   the message from the single-ask cap, and producing the long-mysterious
+>   'enumerated' ejection. Fixed both ways: digit enumeration must appear
+>   in enumeration POSITION (message start or after a colon/semicolon),
+>   and a pre-date title line in the first block is stripped as file
+>   furniture (same class as '# ' comments). ROUTE gains a worked
+>   AI-assistant abstention example (the rule alone failed twice).
+>   Deterministic impossibility feedback verified in the field (cron).
 > - Eval round 13 (first group-then-route run; reorder VALIDATED:
 >   fixture 7 hit its counts/ranking/precedence wins, fixtures 4/5/6
 >   stayed perfect): the predicted cost appeared as cross-category
