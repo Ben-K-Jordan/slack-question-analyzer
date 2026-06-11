@@ -137,6 +137,17 @@ class QuestionAnalyzer:
         else:
             questions = self.extractor.questions_from_messages(messages)
         questions = self._collapse_same_message_rephrasings(questions)
+
+        # The type axis pays off here: feature requests are product feedback,
+        # not support questions a doc page resolves — they leave the support
+        # funnel entirely and get their own list
+        feature_requests = [q for q in questions
+                            if q.get('qtype') == 'feature-request']
+        if feature_requests:
+            questions = [q for q in questions
+                         if q.get('qtype') != 'feature-request']
+            logger.info("Routed %d feature request(s) out of the support "
+                        "funnel to product feedback", len(feature_requests))
         logger.info("Found %d questions", len(questions))
         report('extracting', 1, 1)
 
@@ -153,6 +164,7 @@ class QuestionAnalyzer:
                 'total_groups': 0,
                 'groups': [],
                 'ungrouped_questions': [],
+                'feature_requests': feature_requests,
                 'metadata': self._metadata()
             }
 
@@ -216,6 +228,7 @@ class QuestionAnalyzer:
             'total_groups': len(multi_question_groups),
             'groups': multi_question_groups,
             'ungrouped_questions': [q['questions'][0] for q in single_questions],
+            'feature_requests': feature_requests,
             'answered_questions': answered_total,
             'metadata': self._metadata()
         }

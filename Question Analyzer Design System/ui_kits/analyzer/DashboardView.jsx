@@ -245,11 +245,12 @@ function DashboardView({ onUpload }) {
       <Reveal delay={90}>
         <div style={{ display: 'flex', gap: 56, padding: '22px 24px', background: 'var(--gray-10)', borderLeft: '3px solid var(--blue-60)', marginBottom: d.executiveSummary ? 16 : 32 }}>
           {stat('Questions logged', d.totalQuestions)}
-          {stat('Distinct topics', d.totalGroups, 'var(--purple-60)')}
+          {stat('Recurring topics', d.totalGroups, 'var(--purple-60)')}
           {stat('Answered', d.resolved, 'var(--teal-60)')}
+          {d.featureRequests && d.featureRequests.length ? stat('Product feedback', d.featureRequests.length, '#8a3ffc') : null}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, justifyContent: 'center', marginLeft: 'auto', textAlign: 'right' }}>
-            <span style={{ fontSize: 11, color: 'var(--text-helper)', fontWeight: 500 }}>Top topic</span>
-            <span style={{ fontSize: 18, fontWeight: 600, color: 'var(--blue-70)' }}>{d.topTopic}</span>
+            <span style={{ fontSize: 11, color: 'var(--text-helper)', fontWeight: 500 }}>{d.topTheme ? 'Top theme' : 'Top recurring topic'}</span>
+            <span style={{ fontSize: 18, fontWeight: 600, color: 'var(--blue-70)' }}>{d.topTheme || d.topTopic}</span>
           </div>
         </div>
       </Reveal>
@@ -319,7 +320,7 @@ function DashboardView({ onUpload }) {
 
       <Reveal delay={160}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-          <span style={{ fontSize: 13, color: 'var(--text-helper)', fontWeight: 500 }}>Ranked · {groups.length} topics</span>
+          <span style={{ fontSize: 13, color: 'var(--text-helper)', fontWeight: 500 }}>Ranked · {groups.length} recurring topic{groups.length === 1 ? '' : 's'} <span title="Questions asked 2+ times that merged into a group. Themes (above) count every question; this counts only the repeats.">ⓘ</span></span>
           <span style={{ fontSize: 12, color: 'var(--text-helper)', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Icon name="arrow-down" size={13} /> Most frequent first</span>
         </div>
       </Reveal>
@@ -389,6 +390,23 @@ function DashboardView({ onUpload }) {
           )) : null}
         </div>
       ) : null}
+
+      {d.featureRequests && d.featureRequests.length ? (
+        <div style={{ marginTop: 28 }}>
+          <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)' }}
+            title="Questions classified as feature requests are product feedback, not support questions a doc page resolves — they're routed out of the support funnel">
+            Product feedback ({d.featureRequests.length}) — feature requests, routed out of the support funnel
+          </div>
+          <ul style={{ listStyle: 'none', margin: '12px 0 0', padding: 0, borderLeft: '2px solid #8a3ffc' }}>
+            {d.featureRequests.map((q, i) => (
+              <li key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 16, padding: '8px 16px' }}>
+                <span style={{ fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>{q.text}</span>
+                {q.date && q.date !== 'Unknown' ? <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-placeholder)', whiteSpace: 'nowrap' }}>{q.date}</span> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -423,6 +441,10 @@ function transformAnalysisResults(results) {
     autoAdjusted: (results.metadata && results.metadata.threshold_auto_adjusted)
       ? results.metadata.similarity_threshold : null,
     topTopic: results.groups[0] ? (results.groups[0].topic || fallbackTopic(results.groups[0])) : 'N/A',
+    // The headline is the largest THEME (most representative number on the
+    // page) — a 2x merged group must not be crowned over a 6-question theme
+    topTheme: (results.themes && results.themes[0]) ? results.themes[0].name : null,
+    featureRequests: results.feature_requests || [],
     groups: results.groups.map((g, i) => ({
       rank: i + 1,
       count: g.count,

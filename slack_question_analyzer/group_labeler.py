@@ -124,7 +124,7 @@ ANSWERED_SCHEMA = {
 
 # Prompt pack version: stamped into results metadata so drift is traceable
 # (the LLM cache keys on full prompt text, so bumps also invalidate caches)
-PROMPT_PACK_VERSION = 3
+PROMPT_PACK_VERSION = 4
 
 LABEL_SYSTEM = (
     "If the group is empty, malformed, or too mixed to share one honest "
@@ -257,24 +257,25 @@ SUMMARY_SYSTEM = (
     "faithfully using only the listed topics and their exact counts, respond "
     "{\"summary\": \"NEEDS_REVIEW\"} and nothing else. Do not guess.\n\n"
     "You write a brief executive summary of support-question analytics for a team lead. "
-    "1-2 sentences: the dominant themes, with concrete topic names and counts. "
-    "No filler, no preamble, no advice.\n"
+    "1-2 sentences. No filler, no preamble, no advice.\n"
     "Rules:\n"
-    "- Mention ONLY topics that appear in the list. NEVER invent or add a "
-    "topic that is not listed, even to fill out a sentence.\n"
-    "- Use ONLY each topic's own question count exactly as listed. Do not "
-    "estimate, round, or infer counts. The total question count is NOT a "
-    "topic's count — never attach it to a topic.\n"
-    "- Mention topics in the order listed (they are ranked).\n"
-    "- If the list has a single topic, summarize that one topic and say the "
-    "rest of the questions were each asked once.\n"
-    "- If several topics tie, say they are evenly spread rather than calling "
-    "one dominant.\n"
-    "- If theme totals are provided, LEAD with the top theme(s) and their "
-    "exact counts, then the top topic.\n"
-    "Example input: 'Total questions analyzed: 12' with topics 'Backups - 2', "
-    "'Login Errors - 2'. Example output: {\"summary\": \"The 12 questions are "
-    "evenly spread, led by Backups (2) and Login Errors (2).\"}\n"
+    "- Themes and question groups are DIFFERENT levels. The first sentence "
+    "names THEMES ONLY, with their exact counts, largest first — never mix a "
+    "question group into the theme list.\n"
+    "- A recurring question group may get a SECOND sentence, introduced as "
+    "'the most repeated question' — never presented as a theme.\n"
+    "- Say the questions are 'evenly spread' ONLY if every theme count is "
+    "within 1 of every other theme count. If the largest theme has 2 or "
+    "more questions over the smallest, name the largest first instead.\n"
+    "- Mention ONLY themes and topics that appear in the lists. NEVER invent "
+    "one, even to fill out a sentence.\n"
+    "- Use the exact counts as listed. Do not estimate, round, infer, or "
+    "drop a theme's count. The total question count is NOT a theme's count.\n"
+    "Example input: themes 'File Operations - 6, Performance - 6, "
+    "Licensing - 3, Platform - 2' and top group 'Thread Scaling - 2'. "
+    "Example output: {\"summary\": \"File Operations and Performance lead "
+    "with 6 questions each, followed by Licensing (3) and Platform (2). The "
+    "most repeated question was Thread Scaling (asked 2 times).\"}\n"
     "Respond with JSON only."
 )
 
@@ -325,6 +326,10 @@ EXTRACT_SYSTEM = (
     "- Enumerated steps of a single workflow or task list ('1. Find the file "
     "2. Move it 3. Merge them') are ONE question about whether the whole "
     "workflow is possible — never one question per step.\n"
+    "- Sub-steps in service of a stated goal are NOT independent questions: "
+    "if the goal is merging files and finding them is a step, output ONLY "
+    "the goal question. Never emit a separate question for scaffolding the "
+    "asker didn't independently ask about.\n"
     "- Preserve technical tokens exactly as written: error strings, API "
     "names, product names, version numbers, file names. Never normalize, "
     "paraphrase, or invent them.\n"
@@ -765,9 +770,10 @@ class GroupLabeler:
         """Write a 1-2 sentence executive summary of the top question groups."""
         lines = [f"Total questions analyzed: {total_questions}"]
         if themes:
-            lines.append('Theme totals (exact, deterministic counts): ' +
+            lines.append('Themes (exact, deterministic counts): ' +
                          ', '.join(f"{t['name']} - {t['count']}" for t in themes))
-        lines.append('Top question groups:')
+        lines.append('Recurring question groups (sub-topics within themes, '
+                     'NOT themes):')
         for i, group in enumerate(groups[:10], 1):
             topic = group.get('topic') or group['representative_question']
             lines.append(f"{i}. {topic} — asked {group['count']} times "
