@@ -194,7 +194,7 @@ FEEDBACK_SYSTEM = (
 
 # Prompt pack version: stamped into results metadata so drift is traceable
 # (the LLM cache keys on full prompt text, so bumps also invalidate caches)
-PROMPT_PACK_VERSION = 9
+PROMPT_PACK_VERSION = 10
 
 LABEL_SYSTEM = (
     "If the group is empty, malformed, or too mixed to share one honest "
@@ -386,7 +386,12 @@ EXTRACT_SYSTEM = (
     "return {\"questions\": []} and nothing else. Do not guess.\n\n"
     "You extract answerable questions from support chat messages.\n"
     "Classify each candidate sentence:\n"
-    "- REAL: the writer wants information, a fix, or a yes/no confirmation. KEEP.\n"
+    "- REAL: the writer wants information, a fix, a yes/no confirmation, OR "
+    "a new capability. A relayed wish ('customer would like X', 'they want "
+    "to be able to Y', 'feature request: ...') is a REAL ask — rewrite it "
+    "as a question and tag it 'feature-request'. A described problem the "
+    "writer is stuck on ('been stuck on this all morning', 'out of ideas') "
+    "is an implicit help request — REAL even with no question mark. KEEP.\n"
     "- RHETORICAL: shaped like a question but seeks no answer ('Any "
     "thoughts?', 'Right?', 'Make sense?', 'Is there any way around this?', "
     "'Anyone?'). DROP.\n"
@@ -458,6 +463,9 @@ Wrong because: those are steps of ONE workflow — the only ask is whether the w
 
 DO NOT answer message 4 like this: {"index": 4, "question": "How do I bypass antivirus scanning errors?"}
 Wrong because: the asker never said bypass — they reported a failure and want it explained or fixed. Describe the symptom; never name a resolution they didn't state.
+
+DO NOT split "Can the tool export reports on a schedule? Or do we have to script that ourselves?" into two entries.
+Wrong because: the 'Or ...?' offers an alternative route to the SAME goal (scheduled report export) — that is ONE ask, one entry.
 
 Now extract from these messages."""
 

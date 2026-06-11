@@ -70,7 +70,7 @@ def test_taxonomy_rejects_malformed_buckets(tmp_path):
 
 def test_shipped_taxonomy_is_valid():
     tax = Taxonomy(path='taxonomy.json')
-    assert tax.enabled and tax.version == 2
+    assert tax.enabled and tax.version == 3
     assert len(tax.buckets) == 8
     assert all(b.get('category') for b in tax.buckets)
     # v2 convention: the Action log lives in File Handling

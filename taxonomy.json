@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "comment": "Routing taxonomy: questions are sorted into these buckets by embedding similarity to each bucket's 'anchor' description before any clustering. Anchors are written in ASKERS' language (symptoms, goals, the messy way people describe problems), not documentation language - that's what the embeddings actually match against. 'category' is the fixed merge map. Edit freely; bump 'version' when you do.",
   "buckets": [
     {
@@ -29,7 +29,7 @@
     {
       "id": 5,
       "name": "Connectivity & Authentication",
-      "anchor": "Connections and credentials failing or being set up: SFTP connection keeps getting refused, FTPS and HTTPS endpoints, authorization failure with an Azure Blob container token, container-level tokens against virtual folders, AWS S3 buckets, OAuth and access tokens, certificates and the certificate store, integrating with an external key vault like HashiCorp, SSH keys, credentials, proxies and firewalls blocking transfers, partner cannot connect",
+      "anchor": "Connections and credentials failing or being secured: SFTP connection keeps getting refused, FTPS and HTTPS endpoints, authorization failure with an Azure Blob container token, container-level tokens against virtual folders, AWS S3 buckets, OAuth and access tokens, certificates and the certificate store, integrating with an external key vault like HashiCorp, SSH keys, credentials, proxies and firewalls blocking transfers, partner cannot connect",
       "category": "Platform & Connectivity"
     },
     {
@@ -47,7 +47,7 @@
     {
       "id": 8,
       "name": "Install, Upgrade & Admin",
-      "anchor": "Installing, upgrading and administering: install or upgrade to a new version, container images and what comes pre-installed in them, user management, roles and permissions, who can see what, configuring UI settings for users, admin REST APIs for automation, migrating between environments, Gen-1 versus SaaS versions",
+      "anchor": "Installing, upgrading, administering and onboarding: install or upgrade to a new version, container images and what comes pre-installed in them, onboarding a new trading partner end to end, the steps to set up a new partner from scratch, fastest way to get a new partner live, provisioning and initial setup workflow, user management, roles and permissions, who can see what, configuring UI settings for users, admin REST APIs for automation, migrating between environments, Gen-1 versus SaaS versions",
       "category": "Platform & Connectivity"
     }
   ]
