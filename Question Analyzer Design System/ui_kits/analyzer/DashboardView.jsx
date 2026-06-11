@@ -246,7 +246,13 @@ function DashboardView({ onUpload }) {
         <div style={{ display: 'flex', gap: 56, padding: '22px 24px', background: 'var(--gray-10)', borderLeft: '3px solid var(--blue-60)', marginBottom: d.executiveSummary ? 16 : 32 }}>
           {stat('Questions logged', d.totalQuestions)}
           {stat('Recurring topics', d.totalGroups, 'var(--purple-60)')}
-          {stat('Answered', d.resolved, 'var(--teal-60)')}
+          {d.threadsPresent ? stat('Answered', d.resolved, 'var(--teal-60)') : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
+              title="The export contains no thread replies, so answer status can't be measured — re-export with threads to enable this metric">
+              <span style={{ fontSize: 11, color: 'var(--text-helper)', fontWeight: 500 }}>Answered</span>
+              <span style={{ fontSize: 34, fontWeight: 300, lineHeight: 1, color: 'var(--text-placeholder)' }}>—</span>
+            </div>
+          )}
           {d.featureRequests && d.featureRequests.length ? stat('Product feedback', d.featureRequests.length, '#8a3ffc') : null}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, justifyContent: 'center', marginLeft: 'auto', textAlign: 'right' }}>
             <span style={{ fontSize: 11, color: 'var(--text-helper)', fontWeight: 500 }}>{d.topTheme ? 'Top theme' : 'Top recurring topic'}</span>
@@ -445,6 +451,7 @@ function transformAnalysisResults(results) {
     // page) — a 2x merged group must not be crowned over a 6-question theme
     topTheme: (results.themes && results.themes[0]) ? results.themes[0].name : null,
     featureRequests: results.feature_requests || [],
+    threadsPresent: !!results.threads_present,
     groups: results.groups.map((g, i) => ({
       rank: i + 1,
       count: g.count,

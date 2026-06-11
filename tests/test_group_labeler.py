@@ -702,3 +702,80 @@ def test_feature_requests_leave_the_support_funnel(monkeypatch):
     assert len(results['feature_requests']) == 1
     assert 'graphical' in results['feature_requests'][0]['text']
     assert all('graphical' not in q['text'] for q in results['ungrouped_questions'])
+
+
+# ---- Source-support invariant (misattribution guard) ----
+
+def test_misattributed_extraction_is_reassigned_to_true_source(monkeypatch):
+    """Ground-truth audit regression: the fast model stamped the custom-error
+    question onto a metering message's index. The question inherited the
+    wrong date, the metering question vanished, and the duplicate became a
+    phantom 'asked 2x'. Every extraction must be supported by its claimed
+    source; unsupported ones are reassigned to the message that contains
+    them."""
+    monkeypatch.setenv('LLM_EXTRACTION', 'full')
+    vectors = {
+        'can we get a custom error code that the script can return?': [1.0, 0.0],
+        'how can customers estimate their mft transactions?': [0.0, 1.0],
+    }
+    analyzer = make_analyzer(monkeypatch, vectors=vectors, label_groups=True)
+
+    def extract(texts, thorough=False):
+        if thorough:
+            # quality model recovers the real metering question
+            return [{'index': i, 'question':
+                     'How can customers estimate their mft transactions?'}
+                    for i, t in enumerate(texts) if 'estimate' in t]
+        # fast model: extracts the custom-error question TWICE, once
+        # credited to the metering message (index 1 = wrong)
+        return [
+            {'index': 0, 'question': 'Can we get a custom error code that the script can return?'},
+            {'index': 1, 'question': 'Can we get a custom error code that the script can return?'},
+        ]
+
+    stub_llm(monkeypatch, analyzer,
+             label_group=lambda texts, keywords=None: None,
+             verify_same_topic=lambda a, b: None,
+             extract_questions=extract,
+             summarize_analysis=lambda groups, total, themes=None: None)
+
+    results = analyzer.analyze_slack_content(
+        "2024-06-02\nCan we get a custom error code that the script can return?\n"
+        "-----------------------------------------------------------\n"
+        "2024-05-30\nHow can customers estimate their mft transactions?\n")
+
+    texts = [q['text'] for q in results['ungrouped_questions']]
+    # No phantom 2x group; both real questions present exactly once
+    assert results['total_groups'] == 0
+    assert results['total_questions'] == 2
+    assert texts.count('Can we get a custom error code that the script can return?') == 1
+    assert any('estimate' in t for t in texts)  # metering question recovered
+    # The custom-error question kept its TRUE date, not the metering one's
+    custom = next(q for q in results['ungrouped_questions'] if 'custom' in q['text'])
+    assert custom['date'] == '2024-06-02'
+
+
+def test_unsupported_extraction_dropped_when_no_source_exists(monkeypatch):
+    """A hallucinated question no batch message contains is dropped, with
+    the safety net recovering the real content by regex."""
+    monkeypatch.setenv('LLM_EXTRACTION', 'full')
+    vectors = {'how do i reset my password?': [1.0, 0.0]}
+    analyzer = make_analyzer(monkeypatch, vectors=vectors, label_groups=True)
+
+    def extract(texts, thorough=False):
+        if thorough:
+            return []
+        return [{'index': 0, 'question':
+                 'What is the capital of France in webMethods deployments?'}]
+
+    stub_llm(monkeypatch, analyzer,
+             label_group=lambda texts, keywords=None: None,
+             verify_same_topic=lambda a, b: None,
+             extract_questions=extract,
+             summarize_analysis=lambda groups, total, themes=None: None)
+
+    results = analyzer.analyze_slack_content(
+        "2024-01-05\nHow do I reset my password?\n")
+    texts = [q['text'] for q in results['ungrouped_questions']]
+    assert all('France' not in t for t in texts)   # hallucination dropped
+    assert any('password' in t.lower() for t in texts)  # regex recovered the real one

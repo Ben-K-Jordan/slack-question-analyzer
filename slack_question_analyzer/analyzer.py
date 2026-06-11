@@ -229,6 +229,9 @@ class QuestionAnalyzer:
             'groups': multi_question_groups,
             'ungrouped_questions': [q['questions'][0] for q in single_questions],
             'feature_requests': feature_requests,
+            # Answered=0 with no replies in the export means "unmeasurable",
+            # not "everything went unanswered" — the UI shows the difference
+            'threads_present': any(q.get('replies') for q in questions),
             'answered_questions': answered_total,
             'metadata': self._metadata()
         }
@@ -290,6 +293,60 @@ class QuestionAnalyzer:
             kept.append(q)
         return kept
 
+    @staticmethod
+    def _source_support(question_norm: str, message_text: str) -> float:
+        """
+        Fraction of the question's content words present in a message.
+        Rewrites draw their vocabulary from their source, so a genuine
+        extraction scores high; a misattributed one scores near zero.
+        """
+        tokens = [t for t in re.findall(r'[a-z0-9]+', question_norm.lower())
+                  if len(t) > 3]
+        if not tokens:
+            return 1.0
+        msg = message_text.lower()
+        msg_tokens = [t for t in re.findall(r'[a-z0-9]+', msg) if len(t) > 3]
+        matched = sum(1 for t in tokens
+                      if t in msg or any(mt in t for mt in msg_tokens))
+        return matched / len(tokens)
+
+    SOURCE_SUPPORT_MIN = 0.35
+
+    def _verify_source(self, question: Dict, hit: Dict, batch) -> Optional[Dict]:
+        """
+        Invariant: an extracted question must be textually supported by its
+        claimed source message. If not, reassign it to the batch message
+        that supports it best; if none does, drop it (and let the safety
+        net's regex pass recover whatever the true source actually said).
+        """
+        min_support = float(os.getenv('EXTRACT_SUPPORT_MIN',
+                                      str(self.SOURCE_SUPPORT_MIN)))
+        claimed_text = batch[hit['index']][0]
+        if self._source_support(question['normalized_text'], claimed_text) >= min_support:
+            return question
+
+        best_index, best_support = None, min_support
+        for i, (text, _) in enumerate(batch):
+            if i == hit['index']:
+                continue
+            support = self._source_support(question['normalized_text'], text)
+            if support > best_support:
+                best_index, best_support = i, support
+        if best_index is not None:
+            text, message = batch[best_index]
+            logger.info("Reassigned an extraction to its true source message "
+                        "(claimed message doesn't contain it): %.80r",
+                        question['text'])
+            if self.labeler is not None:
+                self.labeler._count('extract_reassigned')
+            return self._llm_question(hit['question'], text, message,
+                                      hit.get('type'))
+        logger.info("Dropped an unsupported extraction (no message in the "
+                    "batch contains it): %.80r", question['text'])
+        if self.labeler is not None:
+            self.labeler._count('extract_dropped_unsupported')
+        return None
+
     def _extract_questions_llm(self, messages: List[Dict], report) -> List[Dict]:
         """
         LLM-first extraction (LLM_EXTRACTION=full): every message goes to the
@@ -309,14 +366,33 @@ class QuestionAnalyzer:
                     len(candidates), len(batches))
 
         questions = []
+        seen_in_message = set()  # (normalized_text, original_message)
         report('detecting', 0, len(batches))
         for batch_num, batch in enumerate(batches, 1):
             hits = self.labeler.extract_questions([text for text, _ in batch])
             if hits is not None:  # [] is a real answer: "no questions here"
                 for hit in hits:
                     text, message = batch[hit['index']]
-                    questions.append(self._llm_question(hit['question'], text,
-                                                        message, hit.get('type')))
+                    question = self._llm_question(hit['question'], text,
+                                                  message, hit.get('type'))
+                    # Field finding (ground-truth audit): the fast model can
+                    # attribute a question to the WRONG message in its batch.
+                    # The question then inherits the wrong date, the true
+                    # source's questions never get extracted, and the
+                    # duplicate becomes a phantom "asked 2x". Every extraction
+                    # must be textually supported by its claimed source —
+                    # otherwise reassign it to the batch message that does
+                    # support it, or drop it with a trace.
+                    question = self._verify_source(question, hit, batch)
+                    if question is None:
+                        continue
+                    key = (question['normalized_text'], question['original_message'])
+                    if key in seen_in_message:
+                        logger.info("Dropped a duplicate extraction from one "
+                                    "message: %.80r", question['text'])
+                        continue
+                    seen_in_message.add(key)
+                    questions.append(question)
             else:
                 # LLM failed for this batch: regex keeps us from losing questions
                 questions.extend(self.extractor.questions_from_messages(
@@ -358,11 +434,27 @@ class QuestionAnalyzer:
                 recovered = {hit['index'] for hit in (hits or [])}
                 for hit in hits or []:
                     text, message = batch[hit['index']]
-                    add_unless_duplicate(self._llm_question(hit['question'], text,
-                                                            message, hit.get('type')))
+                    question = self._llm_question(hit['question'], text,
+                                                  message, hit.get('type'))
+                    question = self._verify_source(question, hit, batch)
+                    if question is not None:
+                        add_unless_duplicate(question)
                 for q in self.extractor.questions_from_messages(
                         [m for i, (_, m) in enumerate(batch) if i not in recovered]):
                     add_unless_duplicate(q)
+
+        # Reconciliation: questions must never vanish silently. Every message
+        # that produced zero questions is named in the log so a dropped real
+        # question leaves a trace.
+        produced = {q.get('original_message') for q in questions}
+        silent = [text for text, _ in candidates if text[:200] not in produced]
+        if silent:
+            logger.info("%d of %d message(s) produced no questions:",
+                        len(silent), len(candidates))
+            for text in silent:
+                logger.info("  (no questions) %.90r", text)
+            if self.labeler is not None:
+                self.labeler._count('messages_without_questions', len(silent))
         return questions
 
     def _group_with_taxonomy(self, questions: List[Dict], taxonomy: Taxonomy,

@@ -124,7 +124,7 @@ ANSWERED_SCHEMA = {
 
 # Prompt pack version: stamped into results metadata so drift is traceable
 # (the LLM cache keys on full prompt text, so bumps also invalidate caches)
-PROMPT_PACK_VERSION = 4
+PROMPT_PACK_VERSION = 5
 
 LABEL_SYSTEM = (
     "If the group is empty, malformed, or too mixed to share one honest "
@@ -188,7 +188,11 @@ VERIFY_SYSTEM = (
     "different protocols, different root causes, different fixes: "
     "{\"same_topic\": false}\n"
     "Example: Group A asks about triggering transfers via REST API; Group B asks "
-    "about scheduling recurring transfers: {\"same_topic\": false}\n\n"
+    "about scheduling recurring transfers: {\"same_topic\": false}\n"
+    "Example: Group A asks how to merge the content of two files; Group B asks "
+    "whether a control file can trigger a transfer. Both mention files, but "
+    "merging contents and trigger-on-control-file are different operations "
+    "with different doc pages: {\"same_topic\": false}\n\n"
     "Respond with JSON only."
 )
 
