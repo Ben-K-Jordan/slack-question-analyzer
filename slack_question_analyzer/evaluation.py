@@ -307,6 +307,30 @@ def evaluate_transcript(analyzer, fixture: Dict) -> Dict:
         check(f'no ask matches /{pattern}/ (verb drift)', not bad,
               '; '.join(t[:70] for t in bad))
 
+    # Routing humility: these must sit in the review pile, not be
+    # force-fitted into the closest wrong bucket
+    review_rows = [r for r in support if r.get('needs_review')]
+    for pattern in expect.get('review_must_match', []):
+        rx = re.compile(pattern, re.IGNORECASE)
+        in_review = any(rx.search(t) for t in texts(review_rows))
+        placed = [r for r in support
+                  if rx.search(r.get('text') or '') and not r.get('needs_review')]
+        check(f'/{pattern}/ held for review, not force-bucketed', in_review,
+              '; '.join(f"routed to [{r.get('bucket')}]: {(r.get('text') or '')[:55]}"
+                        for r in placed) or 'no surviving question matches')
+    # The inverse control: a clear question must route confidently even
+    # when it looks hard (error strings), never over-abstain into review
+    for spec in expect.get('routed_must_match', []):
+        rx = re.compile(spec['match'], re.IGNORECASE)
+        rows = [r for r in support if rx.search(r.get('text') or '')]
+        ok = any(not r.get('needs_review')
+                 and re.search(spec['bucket'], r.get('bucket') or '',
+                               re.IGNORECASE) for r in rows)
+        check(f"/{spec['match']}/ routed to /{spec['bucket']}/", ok,
+              '; '.join(('review pile' if r.get('needs_review')
+                         else f"[{r.get('bucket')}]") + f": {(r.get('text') or '')[:55]}"
+                        for r in rows) or 'no surviving question matches')
+
     # False-merge twins: no group may contain a member matching A and
     # another member matching B
     for a, b in expect.get('must_not_group', []):

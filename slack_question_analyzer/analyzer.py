@@ -823,6 +823,10 @@ class QuestionAnalyzer:
                 group['theme'] = category
                 for q in group['questions']:
                     q['theme'] = category
+                    # Routing provenance on the row itself: survives the
+                    # group/ungrouped split, so exports and the eval can
+                    # check where any individual question landed
+                    q['bucket'] = taxonomy.bucket_name(b)
             groups.extend(bucket_groups)
 
         # Outliers are kept as unique questions, visibly flagged — a funnel

@@ -234,6 +234,52 @@ def test_shipped_mft_fixture_4_markers_resolve():
                      'fixtures/mft_synthetic_4.json')
 
 
+def test_shipped_mft_fixture_5_markers_resolve():
+    _markers_resolve('fixtures/mft_test_transcript_5.txt',
+                     'fixtures/mft_synthetic_5.json')
+
+
+def test_shipped_mft_fixture_6_markers_resolve():
+    _markers_resolve('fixtures/mft_test_transcript_6.txt',
+                     'fixtures/mft_synthetic_6.json')
+
+
+def test_evaluate_transcript_routing_humility_checks(tmp_path):
+    results = {
+        'total_questions': 4,
+        'total_groups': 0,
+        'groups': [],
+        'ungrouped_questions': [
+            _row('Is the Confluence wiki down?', 'src-a', needs_review=True),
+            # Force-bucketed off-topic question: must FAIL the review check
+            _row('What are the holiday support hours?', 'src-b',
+                 bucket='Scheduling & Performance'),
+            # Clear question correctly routed despite quoting an error
+            _row('Why does SFTP drop with algorithm negotiation failed?',
+                 'src-c', bucket='Connectivity & Authentication'),
+            # Clear question wrongly over-abstained into review
+            _row('Does MFT support PGP encryption?', 'src-d', needs_review=True),
+        ],
+        'feature_requests': [],
+        'metadata': {'llm_stats': {}},
+    }
+    fixture = _transcript_fixture(tmp_path, {
+        'review_must_match': ['confluence', 'holiday'],
+        'routed_must_match': [
+            {'match': 'algorithm negotiation', 'bucket': 'Connectivity'},
+            {'match': 'pgp', 'bucket': '.'},
+        ],
+    })
+    result = evaluate_transcript(_StubAnalyzer(results), fixture)
+    by_name = {c['name']: c for c in result['checks']}
+    assert by_name['/confluence/ held for review, not force-bucketed']['ok']
+    holiday = by_name['/holiday/ held for review, not force-bucketed']
+    assert not holiday['ok'] and 'Scheduling & Performance' in holiday['detail']
+    assert by_name['/algorithm negotiation/ routed to /Connectivity/']['ok']
+    pgp = by_name['/pgp/ routed to /./']
+    assert not pgp['ok'] and 'review pile' in pgp['detail']
+
+
 def test_evaluate_transcript_recurring_groups_and_singletons(tmp_path):
     host_key = [
         _row('How do we enforce host key verification?', 'src-a'),
