@@ -192,7 +192,7 @@ FEEDBACK_SYSTEM = (
 
 # Prompt pack version: stamped into results metadata so drift is traceable
 # (the LLM cache keys on full prompt text, so bumps also invalidate caches)
-PROMPT_PACK_VERSION = 13
+PROMPT_PACK_VERSION = 14
 
 LABEL_SYSTEM = (
     "If the group is empty, malformed, or too mixed to share one honest "
@@ -404,12 +404,14 @@ EXTRACT_SYSTEM = (
     "REAL questions standalone.\n"
     "Most channel traffic is NOT a question: announcements, status updates, "
     "thanks/closures ('fixed now'), FYI links, and decisions yield NOTHING. "
-    "Venting with no concrete symptom ('this deployment has been a "
-    "nightmare') is mood, not an ask — extract nothing; only a resolvable "
-    "symptom makes an implicit ask ('transfers silently stop after 50 "
-    "files'). A log paste with no request attached (posted 'for visibility' "
-    "or noted as self-resolved) yields NOTHING — log text alone is not a "
-    "question. Never rewrite a statement INTO a question.\n"
+    "The venting test: a complaint WITH a concrete symptom ('uploads hang "
+    "at 99% for one customer, no errors anywhere, completely stuck') IS a "
+    "REAL implicit ask — rewrite the symptom as a question. A complaint "
+    "with only mood ('this rollout has been a mess from start to finish') "
+    "has nothing to answer — extract NOTHING. A log paste with no request "
+    "attached (posted 'for visibility' or noted as self-resolved) yields "
+    "NOTHING — log text alone is not a question. Never rewrite a statement "
+    "INTO a question.\n"
     "Rewrite every REAL question as a single standalone question.\n"
     "Standalone test: a reader who never saw the message can answer it "
     "without asking what 'it', 'this', 'they', or 'the platform' refers to — "
@@ -478,6 +480,12 @@ Wrong because: the asker never said bypass — they reported a failure and want 
 
 DO NOT split "Can the tool export reports on a schedule? Or do we have to script that ourselves?" into two entries.
 Wrong because: the 'Or ...?' offers an alternative route to the SAME goal (scheduled report export) — that is ONE ask, one entry.
+
+DO NOT invent a question from a message like "Saw this in the logs but it self-resolved, posting for visibility: WARN retry 1 of 2 for endpoint X / INFO completed".
+Wrong because: nobody asked anything — a log paste with no request attached yields NO entries.
+
+DO NOT keep "Anyone else excited for the long weekend?" as a question.
+Wrong because: social banter seeks solidarity, not information — RHETORICAL, no entry, even with the question mark.
 
 Now extract from these messages."""
 
@@ -889,6 +897,12 @@ class GroupLabeler:
         favorite).
         """
         listing = '\n'.join(f"{c['id']} {c['name']}" for c in candidates)
+        # Abstain must be a VISIBLE option: given only real categories, a
+        # small model picks from the list every time — off-topic questions
+        # were force-routed with the abstain rule sitting unused in the
+        # system prompt
+        listing += ('\n0 NONE OF THESE (off-topic, not about this product, '
+                    'too vague to place, or fits several equally)')
         user = f"Categories:\n{listing}\nQuestion: {question}\nCategory number:"
         data = self._generate_json(self._system(ROUTE_SYSTEM), user, ROUTE_SCHEMA,
                                    max_tokens=20)

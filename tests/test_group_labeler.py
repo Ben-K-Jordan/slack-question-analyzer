@@ -1232,3 +1232,20 @@ def test_question_shaped_statement_not_restored_over_two_model_nos(monkeypatch):
     results = analyzer2.analyze_slack_content(
         '2024-06-09\nWill the staging tenant stay up during the move?\n')
     assert results['total_questions'] == 1
+
+
+def test_choose_bucket_presents_abstain_as_a_listed_option(monkeypatch):
+    """Fixture-6: off-topic questions reached the adjudicator and it picked
+    from the list every time — the abstain rule sat unused in the system
+    prompt. 0 must be a VISIBLE candidate line."""
+    captured = {}
+    labeler = GroupLabeler('ollama')
+
+    def fake_generate(system, user, schema, **kwargs):
+        captured['user'] = user
+        return {'category': 0}
+
+    monkeypatch.setattr(labeler, '_generate_json', fake_generate)
+    assert labeler.choose_bucket('Is the wiki down?', [
+        {'id': 3, 'name': 'Connectivity'}, {'id': 5, 'name': 'Scheduling'}]) == 0
+    assert '0 NONE OF THESE' in captured['user']
