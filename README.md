@@ -2,6 +2,40 @@
 
 AI-powered tool that analyzes Slack questions, groups similar ones together, and ranks them by frequency. Supports multiple AI providers including local Ollama, Azure OpenAI, and standard OpenAI.
 
+## Windows Quick Start — exact terminal commands
+
+One-time prerequisite: install **[Ollama](https://ollama.com/download)** (run the
+installer, that's it — it starts itself in the background).
+
+Then open **PowerShell** and paste these three lines:
+
+```powershell
+git clone https://github.com/Ben-K-Jordan/slack-question-analyzer.git
+cd slack-question-analyzer
+.\setup.bat
+```
+
+`setup.bat` checks Python, installs the package, downloads the AI models
+(~5–8GB the first time — let it run), and opens the dashboard in your browser
+at http://localhost:5000. That's the whole install.
+
+**Every day after that**, it's just:
+
+```powershell
+cd slack-question-analyzer
+.\start.bat
+```
+
+(or double-click `start.bat` in the folder — no terminal needed.)
+
+**If anything seems broken**, this prints exactly what's wrong and how to fix it:
+
+```powershell
+python -m slack_question_analyzer.cli doctor
+```
+
+macOS/Linux: same flow with `./setup.sh` — see [Quick Start](#quick-start-give-this-to-a-teammate) below.
+
 ## Features
 
 - **Question Extraction**: Automatically extracts questions from Slack message dumps —
