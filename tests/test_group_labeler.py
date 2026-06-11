@@ -779,3 +779,30 @@ def test_unsupported_extraction_dropped_when_no_source_exists(monkeypatch):
     texts = [q['text'] for q in results['ungrouped_questions']]
     assert all('France' not in t for t in texts)   # hallucination dropped
     assert any('password' in t.lower() for t in texts)  # regex recovered the real one
+
+
+def test_dropped_unsupported_recovery_still_falls_back_to_regex(monkeypatch):
+    """Safety-net bug: a hit dropped as unsupported still marked its message
+    'recovered', skipping the regex fallback — the question vanished
+    silently. The message must fall through to regex when its only hit dies."""
+    monkeypatch.setenv('LLM_EXTRACTION', 'full')
+    vectors = {'how do i configure iwhi monitoring?': [1.0, 0.0]}
+    analyzer = make_analyzer(monkeypatch, vectors=vectors, label_groups=True)
+
+    def extract(texts, thorough=False):
+        if thorough:
+            # quality model hallucinates something no message contains
+            return [{'index': 0, 'question': 'How do I bake sourdough bread?'}]
+        return []  # fast model misses everything
+
+    stub_llm(monkeypatch, analyzer,
+             label_group=lambda texts, keywords=None: None,
+             verify_same_topic=lambda a, b: None,
+             extract_questions=extract,
+             summarize_analysis=lambda groups, total, themes=None: None)
+
+    results = analyzer.analyze_slack_content(
+        "2024-01-05\nHow do I configure IWHI monitoring?\n")
+    texts = [q['text'] for q in results['ungrouped_questions']]
+    assert all('sourdough' not in t for t in texts)
+    assert any('IWHI' in t for t in texts)  # regex fallback recovered it
