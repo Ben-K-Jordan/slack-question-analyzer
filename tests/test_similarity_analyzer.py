@@ -782,3 +782,35 @@ def test_cross_type_singleton_rescue_vetoed(monkeypatch):
                  typed_question('Why did the thread pool crash with an error?', 'troubleshooting')]
     groups = analyzer.group_similar_questions(questions, verifier=verifier)
     assert sorted(g['count'] for g in groups) == [1, 2]
+
+
+def test_audit_eviction_needs_verifier_agreement(monkeypatch):
+    """Fresh-transcript regression: a single audit sample evicted a TRUE
+    pair. Eviction is destructive — the auditor nominates, the verifier
+    must independently confirm (explicit False) or the nominee stays."""
+    analyzer = make_analyzer(monkeypatch, threshold='0.75')
+
+    # Auditor flags index 0; verifier says SAME topic -> eviction overruled
+    clusters = analyzer._audit_clusters(
+        [[0, 1]],
+        [[question('Limit total concurrent transfers per node?')],
+         [question('Cap how many transfers run at the same time per node?')]],
+        auditor=lambda texts: [0],
+        verifier=lambda a, b: True)
+    assert sorted(map(sorted, clusters)) == [[0, 1]]  # pair survives
+
+    # Verifier agrees it's different -> eviction proceeds
+    clusters = analyzer._audit_clusters(
+        [[0, 1]],
+        [[question('Does the metering agent come pre-installed?')],
+         [question('Are container-level Azure tokens supported?')]],
+        auditor=lambda texts: [0],
+        verifier=lambda a, b: False)
+    assert sorted(map(sorted, clusters)) == [[0], [1]]
+
+    # No verifier available -> auditor verdict stands (old behavior)
+    clusters = analyzer._audit_clusters(
+        [[0, 1]],
+        [[question('a?')], [question('b?')]],
+        auditor=lambda texts: [0])
+    assert sorted(map(sorted, clusters)) == [[0], [1]]

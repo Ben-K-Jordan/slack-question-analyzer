@@ -167,13 +167,17 @@ FEEDBACK_SYSTEM = (
     "Asking HOW to do something, WHETHER something is possible today, or WHY "
     "something is broken is SUPPORT — even if the answer turns out to be "
     "'not supported'. When in doubt, answer false.\n"
+    "Judge the asker's INTENT from the original message when it is shown: "
+    "wish-phrasing ('would be great', 'would love', 'please add', 'any plans "
+    "to') signals feedback even when the rewritten question sounds like a "
+    "support ask.\n"
     "Respond with JSON only: {\"feature_request\": true} or "
     "{\"feature_request\": false}"
 )
 
 # Prompt pack version: stamped into results metadata so drift is traceable
 # (the LLM cache keys on full prompt text, so bumps also invalidate caches)
-PROMPT_PACK_VERSION = 7
+PROMPT_PACK_VERSION = 8
 
 LABEL_SYSTEM = (
     "If the group is empty, malformed, or too mixed to share one honest "
@@ -845,14 +849,18 @@ class GroupLabeler:
             self._count('same_ask_collapsed', len(question_texts) - len(keep))
         return keep
 
-    def confirm_feature_request(self, question: str) -> Optional[bool]:
+    def confirm_feature_request(self, question: str,
+                                context: str = '') -> Optional[bool]:
         """
         Second opinion before a question leaves the support funnel: is this
-        genuinely a request for a capability that doesn't exist? Abstain or
-        failure -> None (callers keep it in support — the safer home).
+        genuinely a request for a capability that doesn't exist? The asker's
+        ORIGINAL message is supplied — the wish-phrasing ("would be great
+        if...") lives there, not in the rewrite. Abstain or failure -> None
+        (callers keep it in support — the safer home).
         """
-        data = self._generate_json(self._system(FEEDBACK_SYSTEM),
-                                   f"Question: {question}\nProduct feedback?",
+        user = (f"Original message: {context[:300]}\n" if context else '') + \
+               f"Question: {question}\nProduct feedback?"
+        data = self._generate_json(self._system(FEEDBACK_SYSTEM), user,
                                    FEEDBACK_SCHEMA, max_tokens=20)
         if data is None or not isinstance(data.get('feature_request'), bool):
             return None

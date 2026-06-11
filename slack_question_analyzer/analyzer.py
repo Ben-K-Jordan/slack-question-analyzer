@@ -152,7 +152,9 @@ class QuestionAnalyzer:
         feature_requests, kept = [], []
         for q in questions:
             if (q.get('qtype') == 'feature-request'
-                    and (confirm is None or confirm(q['text']) is True)):
+                    and (confirm is None
+                         or confirm(q['text'],
+                                    q.get('original_message') or '') is True)):
                 feature_requests.append(q)
             else:
                 if q.get('qtype') == 'feature-request':

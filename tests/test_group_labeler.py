@@ -253,7 +253,7 @@ def stub_llm(monkeypatch, analyzer, **methods):
     # keeping older tests' question sets unchanged
     methods.setdefault('extract_questions', lambda texts, thorough=False: None)
     methods.setdefault('consolidate_same_ask', lambda msg, texts: None)
-    methods.setdefault('confirm_feature_request', lambda text: True)
+    methods.setdefault('confirm_feature_request', lambda text, context='': True)
     for name, fn in methods.items():
         monkeypatch.setattr(analyzer.labeler, name, fn)
 
@@ -875,7 +875,7 @@ def test_unconfirmed_feature_request_stays_in_support(monkeypatch):
              extract_questions=lambda texts, thorough=False: [
                  {'index': 0, 'question': 'Is there a cleaner pattern for routing files by prefix?',
                   'type': 'feature-request'}],  # mis-tagged by the 3B
-             confirm_feature_request=lambda text: False,  # 8B: it's support
+             confirm_feature_request=lambda text, context='': False,  # 8B: it's support
              summarize_analysis=lambda groups, total, themes=None: None)
 
     results = analyzer.analyze_slack_content(
@@ -901,3 +901,17 @@ def test_confirm_feature_request_verdicts(monkeypatch):
     assert labeler.confirm_feature_request('Can you add dark mode?') is True
     patch_chat(monkeypatch, ['{"feature_request": false}'])
     assert labeler.confirm_feature_request('How do I enable dark mode?') is False
+
+
+def test_confirm_feature_request_receives_original_message(monkeypatch):
+    """Intent lives in the asker's words: the original message (with its
+    wish-phrasing) is part of the confirmation prompt."""
+    labeler = GroupLabeler('ollama')
+    captured = []
+    patch_chat(monkeypatch, ['{"feature_request": true}'], captured)
+    labeler.confirm_feature_request(
+        'Does the dashboard have a heat-map view of transfer failures?',
+        context='would be great to see a heat-map of failures by hour')
+    user = captured[0]['body']['messages'][1]['content']
+    assert 'would be great to see a heat-map' in user
+    assert 'wish-phrasing' in captured[0]['body']['messages'][0]['content']
